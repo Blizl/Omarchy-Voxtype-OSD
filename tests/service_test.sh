@@ -16,8 +16,9 @@ test_service_skip_flag() {
   make_temp_home
   export BLIZL_VOXTYPE_SKIP_SERVICE=true
 
-  # Functions must return safely without error when service management is skipped
-  service_is_active "voxtype.service" && fail "service_is_active should return false when skipped" || true
+  if service_is_active "voxtype.service"; then
+    fail "service_is_active should return false when skipped"
+  fi
   service_restart_if_active "voxtype.service" || fail "service_restart_if_active failed"
   service_restore_state "voxtype.service" "false" "false" || fail "service_restore_state failed"
   pass "Service manager gracefully obeys BLIZL_VOXTYPE_SKIP_SERVICE"

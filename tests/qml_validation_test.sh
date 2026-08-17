@@ -9,6 +9,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
 
 # Source test helpers
+# shellcheck disable=SC1091
 source "$DIR/helpers/test_helper.sh"
 
 echo "Running qml_validation_test.sh:"

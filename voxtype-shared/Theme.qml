@@ -3,10 +3,15 @@ pragma Singleton
 // VoxType Quickshell Theme Singleton (Dynamic Omarchy Theme Sync)
 //
 // Dynamically tracks and binds to the user's active Omarchy theme
-// ($XDG_STATE_HOME/omarchy/current/theme/colors.toml) via Quickshell.Io.FileView.
-// Whenever the user switches desktop themes (Nord, Catppuccin, Gruvbox, Tokyo Night,
-// Osaka Jade, etc.), this singleton immediately reparses the TOML and reactively
-// updates all color properties live across all HUD components.
+// ($XDG_STATE_HOME/omarchy/current/theme/colors.toml and theme.name).
+//
+// Omarchy theme switches recreate the theme directory inode (via rm -rf + mv),
+// causing direct inotify watches on colors.toml to receive IN_DELETE_SELF/IN_IGNORED.
+// To ensure 100% rock-solid live synchronization:
+// 1. We watch ~/.local/state/omarchy/current/theme.name (persistent inode rewritten in-place).
+// 2. We watch ~/.local/state/omarchy/current/theme/colors.toml with automatic reload & retry.
+// 3. We provide an idempotent `reload()` function invoked on theme changes, OSD visibility
+//    toggles, daemon state changes, and periodic sanity checks.
 
 import QtQuick
 import Quickshell
@@ -27,6 +32,25 @@ QtObject {
         }
         return "/run/user/1000/omarchy/colors.toml";
     }
+
+    /// Filesystem path to Omarchy's active theme name file.
+    property string themeNamePath: {
+        const xdgState = Quickshell.env("XDG_STATE_HOME");
+        if (xdgState && xdgState.length > 0) {
+            return xdgState + "/omarchy/current/theme.name";
+        }
+        const home = Quickshell.env("HOME");
+        if (home && home.length > 0) {
+            return home + "/.local/state/omarchy/current/theme.name";
+        }
+        return "/run/user/1000/omarchy/theme.name";
+    }
+
+    /// Active theme name (e.g. "nord", "catppuccin", "gruvbox", "tokyo-night")
+    property string currentThemeName: ""
+
+    /// Flag indicating whether at least one valid theme configuration has been loaded.
+    property bool _hasLoadedValidTheme: false
 
     /// Active theme mode: "dark" or "light"
     property string themeMode: "dark"
@@ -103,27 +127,116 @@ QtObject {
     /// dBFS floor for peak calculations.
     property real meterFloorDbfs: -60.0
 
+    // ----- Live FileView Watcher for theme.name -----
+    // Survives directory swaps because ~/.local/state/omarchy/current/ is not removed.
+    property FileView _themeNameWatcher: FileView {
+        path: theme.themeNamePath
+        watchChanges: true
+        printErrors: false
+
+        onLoaded: {
+            var name = (text() || "").trim();
+            if (name.length > 0 && name !== theme.currentThemeName) {
+                theme.currentThemeName = name;
+            }
+            theme.reload();
+        }
+
+        onFileChanged: {
+            reload();
+            theme.reload();
+        }
+    }
+
     // ----- Live FileView Watcher for Omarchy colors.toml -----
-    property FileView _themeWatcher: FileView {
+    property FileView _colorsWatcher: FileView {
         path: theme.colorsTomlPath
         watchChanges: true
         printErrors: false
 
         onLoaded: {
-            theme._parseColorsToml(text() || "");
+            var content = text() || "";
+            if (content.length > 0) {
+                theme._parseColorsToml(content);
+            }
         }
 
         onLoadFailed: {
-            theme._loadDefaults();
+            // Do NOT immediately discard valid theme colors during atomic directory swap
+            if (!theme._hasLoadedValidTheme) {
+                theme._loadDefaults();
+            }
+            if (theme._retryTimer) {
+                theme._retryTimer.restart();
+            }
         }
 
-        onFileChanged: reload()
+        onFileChanged: {
+            reload();
+            var content = text() || "";
+            if (content.length > 0) {
+                theme._parseColorsToml(content);
+            }
+        }
+    }
+
+    // Short delayed retry timer to catch the recreated colors.toml inode
+    property Timer _retryTimer: Timer {
+        interval: 60
+        repeat: false
+        onTriggered: {
+            if (theme._colorsWatcher) {
+                theme._colorsWatcher.reload();
+                var content = theme._colorsWatcher.text() || "";
+                if (content.length > 0) {
+                    theme._parseColorsToml(content);
+                }
+            }
+        }
+    }
+
+    // Periodic sanity check timer (every 2s) to guarantee freshness across suspend/resume
+    property Timer _sanityTimer: Timer {
+        interval: 2000
+        running: true
+        repeat: true
+        onTriggered: {
+            if (theme._themeNameWatcher) {
+                var name = (theme._themeNameWatcher.text() || "").trim();
+                if (name.length > 0 && name !== theme.currentThemeName) {
+                    theme.currentThemeName = name;
+                    theme.reload();
+                }
+            }
+        }
+    }
+
+    /// Public method to force an immediate reload and reparsing of theme colors.
+    function reload() {
+        if (_themeNameWatcher) {
+            _themeNameWatcher.reload();
+            var name = (_themeNameWatcher.text() || "").trim();
+            if (name.length > 0) {
+                currentThemeName = name;
+            }
+        }
+        if (_colorsWatcher) {
+            _colorsWatcher.reload();
+            var content = _colorsWatcher.text() || "";
+            if (content.length > 0) {
+                _parseColorsToml(content);
+            } else if (_retryTimer) {
+                _retryTimer.restart();
+            }
+        }
     }
 
     // Zero-dependency, robust TOML parser for Omarchy key-value colors
     function _parseColorsToml(content) {
         if (!content || content.length === 0) {
-            _loadDefaults();
+            if (!_hasLoadedValidTheme) {
+                _loadDefaults();
+            }
             return;
         }
 
@@ -163,7 +276,10 @@ QtObject {
             }
         }
 
-        _applyColors(map);
+        if (Object.keys(map).length > 0) {
+            _applyColors(map);
+            _hasLoadedValidTheme = true;
+        }
     }
 
     function _applyColors(map) {

@@ -114,6 +114,7 @@ PanelWindow {
     // ----- panel surface -----
 
     visible: root.open
+    onOpenChanged: if (open) VT.Theme.reload()
     color: "transparent"
     anchors { top: true; bottom: true; left: true; right: true }
     exclusionMode: ExclusionMode.Ignore

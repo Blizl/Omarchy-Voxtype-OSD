@@ -95,10 +95,23 @@ PanelWindow {
     }
 
     onDaemonStateChanged: {
+        VT.Theme.reload();
         if (daemonState === "recording") {
             _resetState();
         } else if (daemonState === "idle" || daemonState === "") {
             _resetState();
+        }
+    }
+
+    onVisibleChanged: {
+        if (visible) {
+            VT.Theme.reload();
+        }
+    }
+
+    onIsStateActiveChanged: {
+        if (isStateActive) {
+            VT.Theme.reload();
         }
     }
 

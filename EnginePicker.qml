@@ -326,6 +326,7 @@ PanelWindow {
     // between opens via `voxtype-bin` package upgrades.
     onOpenChanged: {
         if (root.open) {
+            VT.Theme.reload();
             configFile.reload();
             featuresProcess.refresh();
             // Reset transient state so a previous "Failed to..." line

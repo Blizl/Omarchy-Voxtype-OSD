@@ -46,6 +46,21 @@ qml_verify_installed() {
   return 0
 }
 
+# Validate that the installed QML files can be loaded by Quickshell without runtime errors
+qml_validate_runtime() {
+  local target_dir="${1:-$(qml_target_dir)}"
+  if command -v qs >/dev/null 2>&1; then
+    local qs_output
+    qs_output=$(timeout 2 qs -p "$target_dir/shell.qml" 2>&1 || true)
+    if echo "$qs_output" | grep -q "ERROR: Failed to load configuration"; then
+      echo "qml_validate_runtime: Quickshell failed to load configuration at $target_dir:" >&2
+      echo "$qs_output" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # Install QML files into target directory
 qml_install() {
   local source_dir="$1"
@@ -66,7 +81,8 @@ qml_install() {
     chmod 644 "$dest_file"
   done < <(qml_managed_files)
 
-  qml_verify_installed "$target_dir"
+  qml_verify_installed "$target_dir" || return 1
+  qml_validate_runtime "$target_dir" || return 1
 }
 
 # Remove installed QML files

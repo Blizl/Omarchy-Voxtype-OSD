@@ -1,0 +1,17 @@
+# VoxType sample configuration file for testing
+engine = "whisper"
+model = "base.en"
+language = "en"
+temperature = 0.0
+
+[hotkey]
+# Hotkey activation settings
+enabled = true
+key = "space"
+modifiers = ["alt"]
+
+[audio]
+sample_rate = 16000
+channels = 1
+vad_sensitivity = 0.5
+chunk_size_ms = 30

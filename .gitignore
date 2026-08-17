@@ -1,0 +1,9 @@
+.DS_Store
+*.swp
+*.tmp
+*~
+backups/
+e2e-checkpoints/
+.local/
+.config/
+/tests/scratch/

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#
+# tests/run - VoxType OSD Test Suite Runner
+#
+
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+passed_count=0
+failed_count=0
+
+printf '========================================================\n'
+printf '      Omarchy-VoxType-OSD Unit & Integration Tests      \n'
+printf '========================================================\n'
+
+for test_script in "$ROOT"/tests/*_test.sh; do
+  [[ -f "$test_script" ]] || continue
+  test_name="${test_script#"$ROOT"/}"
+  printf '\n==> Executing %s\n' "$test_name"
+  if bash "$test_script"; then
+    passed_count=$((passed_count + 1))
+  else
+    printf 'FAILED: %s\n' "$test_name" >&2
+    failed_count=$((failed_count + 1))
+  fi
+done
+
+printf '\n========================================================\n'
+printf 'Test Summary: %d passed, %d failed\n' "$passed_count" "$failed_count"
+printf '========================================================\n'
+
+if ((failed_count > 0)); then
+  exit 1
+fi
+
+printf '\nAll test suites passed successfully (100%%).\n'

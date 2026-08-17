@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+#
+# bin/restore - Recovery Utility for VoxType OSD Configuration
+#
+# Reverts VoxType configuration and quickshell files to a previous
+# checkpoint, transaction backup, or stock settings.
+
+set -euo pipefail
+
+PLUGIN_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/transaction.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/checkpoint.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/voxtype-config.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/qml-installer.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/service.sh"
+
+STATE_ROOT="${BLIZL_VOXTYPE_OSD_STATE_DIR:-$HOME/.local/state/blizl.voxtype-osd}"
+INSTALL_FILE="$STATE_ROOT/install.json"
+
+show_help() {
+  cat <<USAGE
+Usage: bin/restore [OPTIONS]
+
+Recovery utility for VoxType OSD configuration and files.
+
+Options:
+  --list               List all available snapshot checkpoints
+  --checkpoint <ID>    Restore from a specific checkpoint snapshot ID
+  --latest             Restore from the most recent setup backup
+  --stock              Disable Quickshell OSD and reset to stock defaults
+  --dry-run            Simulate recovery without writing changes
+  -h, --help           Show this help message
+USAGE
+}
+
+ACTION="latest"
+CHECKPOINT_ID=""
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --list)
+      ACTION="list"
+      shift
+      ;;
+    --checkpoint)
+      ACTION="checkpoint"
+      CHECKPOINT_ID="${2:-}"
+      [[ -n "$CHECKPOINT_ID" ]] || {
+        echo "Error: Missing checkpoint ID argument" >&2
+        exit 1
+      }
+      shift 2
+      ;;
+    --latest)
+      ACTION="latest"
+      shift
+      ;;
+    --stock)
+      ACTION="stock"
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    -h | --help)
+      show_help
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      show_help
+      exit 1
+      ;;
+  esac
+done
+
+case "$ACTION" in
+  list)
+    echo "Available snapshot checkpoints in $(checkpoint_root):"
+    checkpoints="$(checkpoint_list)"
+    if [[ -z "$checkpoints" ]]; then
+      echo "  (None found)"
+    else
+      while IFS= read -r id; do
+        printf '  • %s\n' "$id"
+      done <<<"$checkpoints"
+    fi
+    exit 0
+    ;;
+
+  checkpoint)
+    echo "Restoring from checkpoint: $CHECKPOINT_ID..."
+    if [[ "$DRY_RUN" == true ]]; then
+      echo "[Dry-run] Would verify and restore files from checkpoint $CHECKPOINT_ID"
+      exit 0
+    fi
+    checkpoint_restore "$CHECKPOINT_ID"
+    service_restart_if_active "voxtype.service" || true
+    echo "Checkpoint $CHECKPOINT_ID restored successfully."
+    exit 0
+    ;;
+
+  stock)
+    echo "Resetting VoxType OSD configuration to stock defaults..."
+    config_file="$(voxtype_config_default_path)"
+    if [[ "$DRY_RUN" == true ]]; then
+      echo "[Dry-run] Would disable [osd] in $config_file and uninstall $PLUGIN_ROOT files"
+      exit 0
+    fi
+    if [[ -f "$config_file" ]]; then
+      voxtype_config_disable_osd "$config_file"
+    fi
+    qml_uninstall "$(qml_target_dir)"
+    service_restart_if_active "voxtype.service" || true
+    echo "Reset to stock configuration complete."
+    exit 0
+    ;;
+
+  latest)
+    if [[ ! -f "$INSTALL_FILE" ]]; then
+      echo "No previous installation record found in $INSTALL_FILE."
+      echo "Use --list to see available checkpoints or --stock to reset to defaults."
+      exit 1
+    fi
+    transaction_dir="$(jq -r '.transaction // ""' "$INSTALL_FILE")"
+    if [[ -z "$transaction_dir" || ! -f "$transaction_dir/targets.tsv" ]]; then
+      echo "Error: Recorded transaction directory is missing: $transaction_dir" >&2
+      exit 1
+    fi
+    echo "Restoring from latest setup backup: $transaction_dir..."
+    if [[ "$DRY_RUN" == true ]]; then
+      echo "[Dry-run] Would restore files recorded in $transaction_dir/targets.tsv"
+      exit 0
+    fi
+    transaction_restore "$transaction_dir"
+    service_restart_if_active "voxtype.service" || true
+    echo "Restoration complete."
+    exit 0
+    ;;
+esac

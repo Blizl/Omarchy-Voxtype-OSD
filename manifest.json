@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "blizl.voxtype-osd",
+  "name": "VoxType OSD HUD",
+  "version": "1.0.0",
+  "author": "Blizl Labs LLC",
+  "license": "MIT",
+  "description": "Modern floating capsule HUD, dynamic equalizer visualizer, and adaptive theme OSD for VoxType on Omarchy Quattro.",
+  "kinds": [
+    "overlay"
+  ],
+  "entryPoints": {
+    "overlay": "VoxTypeOsdOverlay.qml"
+  },
+  "metadata": {
+    "category": "Audio & Dictation",
+    "documentation": "https://github.com/Blizl/Omarchy-VoxType-OSD#readme",
+    "issues": "https://github.com/Blizl/Omarchy-VoxType-OSD/issues"
+  }
+}

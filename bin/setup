@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+#
+# bin/setup - Safe Installer for VoxType OSD Omarchy Plugin
+#
+# Installs Quickshell OSD HUD components and configures VoxType to use
+# the Quickshell frontend. Includes user confirmation, automated backups,
+# atomic rollback on error, and idempotency.
+
+set -euo pipefail
+
+PLUGIN_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/transaction.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/checkpoint.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/voxtype-config.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/qml-installer.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/service.sh"
+
+STATE_ROOT="${BLIZL_VOXTYPE_OSD_STATE_DIR:-$HOME/.local/state/blizl.voxtype-osd}"
+CONFIG_FILE="$(voxtype_config_default_path)"
+QUICKSHELL_DIR="$(qml_target_dir)"
+INSTALL_FILE="$STATE_ROOT/install.json"
+
+NON_INTERACTIVE=false
+SKIP_SERVICE=false
+DRY_RUN=false
+CREATED_TRANSACTION=false
+COMMITTED=false
+
+say() { printf '%s\n' "$*"; }
+fail() {
+  printf 'setup: %s\n' "$*" >&2
+  exit 1
+}
+
+show_help() {
+  cat <<USAGE
+Usage: bin/setup [OPTIONS]
+
+Installs the VoxType Quickshell OSD HUD and configures VoxType to use it.
+
+Options:
+  -y, --yes          Proceed automatically without interactive prompts
+  --skip-service     Skip systemd service restarts (useful for containers/testing)
+  --dry-run          Show planned changes without modifying disk
+  -h, --help         Show this help message
+USAGE
+}
+
+confirm() {
+  local prompt="$1"
+  local default="${2:-yes}"
+  local answer suffix
+
+  if [[ "$NON_INTERACTIVE" == true || -n "${BLIZL_VOXTYPE_CONFIRM:-}" ]]; then
+    return 0
+  fi
+  [[ -t 0 ]] || return 0
+  [[ "$default" == yes ]] && suffix='[Y/n]' || suffix='[y/N]'
+  read -r -p "$prompt $suffix " answer
+  answer="${answer:-$default}"
+  [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+cleanup() {
+  local status=$?
+  if ((status != 0)) && [[ "$CREATED_TRANSACTION" == true && "$COMMITTED" != true ]]; then
+    say "Setup encountered an error; rolling back changes..."
+    transaction_restore "$TRANSACTION_DIR" || {
+      printf 'Error: Rollback failed.\n' >&2
+    }
+  fi
+}
+
+trap cleanup EXIT
+
+# Parse CLI flags
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -y | --yes)
+      NON_INTERACTIVE=true
+      shift
+      ;;
+    --skip-service)
+      SKIP_SERVICE=true
+      export BLIZL_VOXTYPE_SKIP_SERVICE=true
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    -h | --help)
+      show_help
+      exit 0
+      ;;
+    *)
+      fail "Unknown option: $1"
+      ;;
+  esac
+done
+
+if [[ -n "${BLIZL_VOXTYPE_NONINTERACTIVE:-}" && "${BLIZL_VOXTYPE_NONINTERACTIVE}" == "true" ]]; then
+  NON_INTERACTIVE=true
+fi
+
+say "========================================================"
+say "      VoxType OSD HUD - Quickshell Plugin Setup        "
+say "========================================================"
+say ""
+
+# Display status
+say "Target configuration file: $CONFIG_FILE"
+say "Target Quickshell directory: $QUICKSHELL_DIR"
+say ""
+
+if [[ -f "$CONFIG_FILE" ]]; then
+  voxtype_config_summary "$CONFIG_FILE"
+  say ""
+fi
+
+if [[ "$DRY_RUN" == true ]]; then
+  say "[Dry-run] Planned actions:"
+  say "  1. Back up $CONFIG_FILE and $QUICKSHELL_DIR"
+  say "  2. Install Quickshell OSD components into $QUICKSHELL_DIR"
+  say "  3. Set [osd] frontend = 'quickshell' in $CONFIG_FILE"
+  say "  4. Restart voxtype.service if currently active"
+  exit 0
+fi
+
+# Confirmation prompt
+if ! confirm "Proceed with VoxType OSD HUD installation and configuration?"; then
+  say "Setup cancelled by user."
+  exit 0
+fi
+
+say "Starting installation..."
+
+# Initialize transaction and checkpoint
+mkdir -p -- "$STATE_ROOT"
+transaction_begin "$STATE_ROOT"
+CREATED_TRANSACTION=true
+
+# Back up targets
+transaction_backup "$CONFIG_FILE"
+transaction_backup "$QUICKSHELL_DIR"
+transaction_backup "$INSTALL_FILE"
+
+# Create snapshot checkpoint
+checkpoint_id="$(checkpoint_create || printf 'none')"
+
+# 1. Install QML components
+say "Installing Quickshell components to $QUICKSHELL_DIR..."
+qml_install "$PLUGIN_ROOT" "$QUICKSHELL_DIR"
+
+# 2. Update config.toml
+say "Configuring VoxType OSD settings in $CONFIG_FILE..."
+voxtype_config_configure_osd "$CONFIG_FILE" "true" "quickshell" "bottom-center" "320" "48" "80" "0.96" "12.0"
+
+# 3. Restart service if active
+service_was_active=false
+if service_is_active "voxtype.service"; then
+  service_was_active=true
+  if [[ "$SKIP_SERVICE" != true ]]; then
+    say "Restarting voxtype.service..."
+    service_restart_if_active "voxtype.service" || true
+  fi
+fi
+
+# 4. Save installation record
+cat <<EOF >"$INSTALL_FILE"
+{
+  "version": 1,
+  "installedAt": "$(date -u +%Y%m%dT%H%M%SZ)",
+  "transaction": "$TRANSACTION_DIR",
+  "checkpointId": "$checkpoint_id",
+  "configFile": "$CONFIG_FILE",
+  "quickshellDir": "$QUICKSHELL_DIR",
+  "serviceWasActive": $service_was_active
+}
+EOF
+
+COMMITTED=true
+say ""
+say "========================================================"
+say " VoxType OSD HUD setup completed successfully!"
+say "========================================================"
+say ""
+say "Features enabled:"
+say "  - Modern floating capsule HUD with Omarchy Nord styling"
+say "  - Real-time animated equalizer bars with audio peak detection"
+say "  - State indicators for recording, streaming, and transcription"
+say "  - Elapsed timer & VAD halo indicators"
+say ""

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# bin/uninstall - Clean Uninstaller for VoxType OSD Omarchy Plugin
+#
+# Restores previous VoxType configuration, removes installed Quickshell
+# components, and restores service state.
+
+set -euo pipefail
+
+PLUGIN_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/transaction.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/checkpoint.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/voxtype-config.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/qml-installer.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/service.sh"
+
+STATE_ROOT="${BLIZL_VOXTYPE_OSD_STATE_DIR:-$HOME/.local/state/blizl.voxtype-osd}"
+INSTALL_FILE="$STATE_ROOT/install.json"
+SKIP_SERVICE=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-service)
+      SKIP_SERVICE=true
+      export BLIZL_VOXTYPE_SKIP_SERVICE=true
+      shift
+      ;;
+    -h | --help)
+      echo "Usage: bin/uninstall [--skip-service]"
+      exit 0
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [[ ! -f "$INSTALL_FILE" ]]; then
+  echo "No blizl.voxtype-osd installation record found. Running clean-up..."
+  qml_uninstall "$(qml_target_dir)"
+  exit 0
+fi
+
+transaction_dir="$(jq -r '.transaction // ""' "$INSTALL_FILE")"
+service_was_active="$(jq -r '.serviceWasActive // false' "$INSTALL_FILE")"
+
+echo "Uninstalling VoxType OSD HUD..."
+
+# Restore files from recorded transaction backup
+if [[ -n "$transaction_dir" && -f "$transaction_dir/targets.tsv" ]]; then
+  echo "Restoring previous files from transaction backup..."
+  transaction_restore "$transaction_dir"
+else
+  echo "No transaction record found; removing installed files directly..."
+  qml_uninstall "$(qml_target_dir)"
+  voxtype_config_disable_osd "$(voxtype_config_default_path)" || true
+fi
+
+# Clean up install record
+rm -f -- "$INSTALL_FILE"
+
+# Restart voxtype service if it was active
+if [[ "$SKIP_SERVICE" != true && "$service_was_active" == "true" ]]; then
+  echo "Restarting voxtype.service..."
+  service_restart_if_active "voxtype.service" || true
+fi
+
+echo "VoxType OSD HUD has been cleanly uninstalled."

@@ -168,7 +168,7 @@ PanelWindow {
             NumberAnimation { duration: 180; easing.type: Easing.OutQuad }
         }
         Behavior on scale {
-            NumberAnimation { duration: 220; easing.type: Easing.OutBack; overshoot: 1.15 }
+            NumberAnimation { duration: 220; easing.type: Easing.OutBack; easing.overshoot: 1.15 }
         }
 
         // Ambient outer glow shadow

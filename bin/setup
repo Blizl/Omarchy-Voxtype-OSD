@@ -69,7 +69,9 @@ confirm() {
   if [[ "$NON_INTERACTIVE" == true || -n "${BLIZL_VOXTYPE_CONFIRM:-}" ]]; then
     return 0
   fi
-  [[ -t 0 ]] || return 0
+  if [[ ! -t 0 ]]; then
+    fail "No terminal available to confirm changes. Re-run with --yes to consent non-interactively (see --help)."
+  fi
   [[ "$default" == yes ]] && suffix='[Y/n]' || suffix='[y/N]'
   read -r -p "$prompt $suffix " answer
   answer="${answer:-$default}"
@@ -137,6 +139,15 @@ done
 
 if [[ -n "${BLIZL_VOXTYPE_NONINTERACTIVE:-}" && "${BLIZL_VOXTYPE_NONINTERACTIVE}" == "true" ]]; then
   NON_INTERACTIVE=true
+fi
+
+# Required external tools
+missing=()
+for tool in jq voxtype qs; do
+  command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+done
+if ((${#missing[@]} > 0)) && [[ -z "${BLIZL_VOXTYPE_SKIP_DEPENDENCY_CHECK:-}" ]]; then
+  fail "Missing required tools: ${missing[*]} (need VoxType with the Quickshell frontend, Quickshell, and jq). See README 'Requirements'."
 fi
 
 say "========================================================"

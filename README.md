@@ -32,6 +32,19 @@ The `SUPER + E` engine picker and `SUPER + M` meeting controls panel float over 
 
 ---
 
+## Requirements
+
+| Dependency | Why | Notes |
+| --- | --- | --- |
+| [Omarchy](https://omarchy.org) (Quattro) on Hyprland | Plugin host, theme files (`~/.config/omarchy/current/theme/colors.toml`), `bindings.lua` | Tested on Omarchy Quattro |
+| [VoxType](https://voxtype.io) ≥ 0.7 | The dictation daemon this HUD visualises | Setup sets `[osd] frontend = "quickshell"` in `~/.config/voxtype/config.toml` |
+| [Quickshell](https://quickshell.outfoxxed.me) (`qs`) with Qt 6 `QtQuick.Effects` | Renders the layer-shell overlay and the masked theme reveal | Ships with Omarchy |
+| `jq` | Install/uninstall record handling | Ships with Omarchy |
+
+`bin/setup` checks for `jq`, `voxtype` and `qs` before touching anything. No files outside `~/.config/voxtype`, `~/.local/share/voxtype`, `~/.local/state/blizl.voxtype-osd` and (only with your consent) `~/.config/hypr/bindings.lua` are modified.
+
+---
+
 ## Installation
 
 ### Via Omarchy Plugin Manager
@@ -228,11 +241,12 @@ omarchy plugin validate .
 | `manifest.json` schemaVersion 1 | ✅ | Exactly integer `1`, non-reserved `blizl.voxtype-osd` ID |
 | Valid entryPoints & kinds | ✅ | `kinds: ["overlay"]`, `entryPoints.overlay: "VoxTypeOsdOverlay.qml"` |
 | No symlinks in repository | ✅ | 100% regular files and directories |
-| User confirmation before mutation | ✅ | `bin/setup` prompts before changing config (bypassable with `--yes`) |
+| User confirmation before mutation | ✅ | `bin/setup` prompts before changing config or keybindings; without a TTY it refuses unless `--yes` is passed explicitly; existing keybindings are never overridden without a "yes" |
 | Automated rollback on error | ✅ | Trap-based atomic transaction restoration on any failure |
 | Clean uninstaller | ✅ | `bin/uninstall` restores pre-install config and removes files |
 | Idempotency | ✅ | Setup can be run repeatedly without duplicate entries or drift |
-| Isolated unit test suite | ✅ | `tests/run` executes 8 test suites with mock `$HOME` environments |
+| Isolated unit test suite | ✅ | `tests/run` executes 12 test suites with mock `$HOME` environments |
+| Dependencies & license documented | ✅ | See [Requirements](#requirements) and [License](#license) (MIT) |
 | Shellcheck & shfmt clean | ✅ | Zero warnings or formatting discrepancies |
 
 ---

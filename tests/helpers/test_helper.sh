@@ -38,6 +38,7 @@ make_temp_home() {
   export BLIZL_VOXTYPE_SKIP_SERVICE=true
   export BLIZL_VOXTYPE_NONINTERACTIVE=true
   export BLIZL_VOXTYPE_CONFIRM=yes
+  export BLIZL_VOXTYPE_SKIP_DEPENDENCY_CHECK=true
 }
 
 fail() {

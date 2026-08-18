@@ -90,7 +90,9 @@ cleanup() {
   local status=$?
   if ((status != 0)) && [[ "$CREATED_TRANSACTION" == true && "$COMMITTED" != true ]]; then
     say "Setup encountered an error; rolling back changes..."
-    [[ "$KEYBINDINGS_INSTALLED" == true ]] && keybindings_remove "$(keybindings_file)" || true
+    if [[ "$KEYBINDINGS_INSTALLED" == true ]]; then
+      keybindings_remove "$(keybindings_file)" || true
+    fi
     transaction_restore "$TRANSACTION_DIR" || {
       printf 'Error: Rollback failed.\n' >&2
     }

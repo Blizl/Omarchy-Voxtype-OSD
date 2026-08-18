@@ -74,11 +74,26 @@ Pass `--yes` or `-y` for non-interactive automated installations (e.g. scripts o
 
 ### Uninstalling
 
-To restore previous configurations and cleanly remove installed components:
+#### Via Omarchy Plugin Manager
+
+Run the plugin's uninstaller first (it restores your previous VoxType config, removes the installed Quickshell files and the `SUPER + E` / `SUPER + M` bindings), then remove the plugin itself:
+
+```bash
+~/.config/omarchy/plugins/blizl.voxtype-osd/bin/uninstall \
+  && omarchy plugin remove blizl.voxtype-osd
+```
+
+`omarchy plugin remove` on its own only deletes the plugin folder — it does not know about the files `bin/setup` created, so always run `bin/uninstall` first.
+
+#### Direct / Local Setup
+
+From the cloned repository:
 
 ```bash
 ./bin/uninstall
 ```
+
+Both paths restore previous configurations byte-for-byte and remove only what setup installed.
 
 ### Recovery Utility
 

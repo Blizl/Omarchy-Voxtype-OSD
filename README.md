@@ -1,8 +1,10 @@
 # VoxType OSD HUD for Omarchy Quattro
 
-`blizl.voxtype-osd` is a clean-architecture Omarchy Quattro plugin providing a modern floating capsule HUD on-screen display (OSD), dynamic equalizer visualizer, theme adaptivity, engine switcher, and meeting controls for [VoxType](https://github.com/Blizl/voxtype).
+A floating, click-through voice HUD for [VoxType](https://github.com/Blizl/voxtype) that automatically matches your Omarchy theme.
 
-![VoxType OSD Preview](assets/voxtype-osd-preview.jpg)
+![VoxType OSD Demo](assets/voxtype-osd-demo.gif)
+
+`blizl.voxtype-osd` is a clean-architecture Omarchy Quattro plugin providing a modern floating capsule HUD on-screen display (OSD), dynamic equalizer visualizer, live theme synchronization, engine switcher, and meeting controls for VoxType.
 
 ---
 

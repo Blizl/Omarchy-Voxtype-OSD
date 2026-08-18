@@ -19,6 +19,8 @@ source "$PLUGIN_ROOT/lib/voxtype-config.sh"
 source "$PLUGIN_ROOT/lib/qml-installer.sh"
 # shellcheck disable=SC1091
 source "$PLUGIN_ROOT/lib/service.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/keybindings.sh"
 
 STATE_ROOT="${BLIZL_VOXTYPE_OSD_STATE_DIR:-$HOME/.local/state/blizl.voxtype-osd}"
 INSTALL_FILE="$STATE_ROOT/install.json"
@@ -41,9 +43,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+remove_keybindings() {
+  local file
+  file="$(keybindings_file)"
+  if keybindings_installed "$file"; then
+    echo "Removing VoxType panel keybindings from $file..."
+    keybindings_remove "$file"
+    keybindings_reload
+  fi
+}
+
 if [[ ! -f "$INSTALL_FILE" ]]; then
   echo "No blizl.voxtype-osd installation record found. Running clean-up..."
   qml_uninstall "$(qml_target_dir)"
+  remove_keybindings
   exit 0
 fi
 
@@ -61,6 +74,9 @@ else
   qml_uninstall "$(qml_target_dir)"
   voxtype_config_disable_osd "$(voxtype_config_default_path)" || true
 fi
+
+# Remove our keybinding block (user edits elsewhere in the file are preserved)
+remove_keybindings
 
 # Clean up install record
 rm -f -- "$INSTALL_FILE"

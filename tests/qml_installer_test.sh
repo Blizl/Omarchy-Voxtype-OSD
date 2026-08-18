@@ -30,6 +30,7 @@ test_qml_installer_installs_and_uninstalls() {
   assert_file_exists "$VOXTYPE_QUICKSHELL_DIR/MeetingControls.qml"
   assert_file_exists "$VOXTYPE_QUICKSHELL_DIR/voxtype-shared/qmldir"
   assert_file_exists "$VOXTYPE_QUICKSHELL_DIR/voxtype-shared/Theme.qml"
+  assert_file_exists "$VOXTYPE_QUICKSHELL_DIR/voxtype-shared/ThemeReveal.qml"
   assert_file_exists "$VOXTYPE_QUICKSHELL_DIR/voxtype-shared/StateReader.qml"
   assert_file_exists "$VOXTYPE_QUICKSHELL_DIR/voxtype-shared/AudioBridge.qml"
   pass "All QML and shared components installed successfully"

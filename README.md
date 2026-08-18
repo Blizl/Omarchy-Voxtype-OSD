@@ -1,6 +1,6 @@
 # VoxType OSD HUD for Omarchy Quattro
 
-A floating, click-through voice HUD for [VoxType](https://github.com/Blizl/voxtype) that automatically matches your Omarchy theme.
+A floating, click-through voice HUD for [VoxType](https://github.com/Blizl/voxtype) that automatically matches your Omarchy theme, with a smooth animated reveal on every theme switch.
 
 ![VoxType OSD Demo](assets/voxtype-osd-demo.gif)
 
@@ -18,9 +18,10 @@ A floating, click-through voice HUD for [VoxType](https://github.com/Blizl/voxty
   - 🔵 **Streaming**: Nord Frost cyan glow with live voice activity.
   - 🟡 **Transcribing**: Nord amber glow + animated traveling wave.
   - 🟢 **Voice Activity (VAD)**: Dynamic green halo trigger on active speech.
+- **Animated Theme Transitions**: When the active Omarchy theme changes, the OSD plays a short masked reveal wipe — mirroring Omarchy's own wallpaper transition — instead of an abrupt colour flip, with a brief "peek" to confirm the change even while hidden. Reveal geometry is configurable (`omarchy` / `grow` / `wipe-right` / `wipe-left` / `fade` / `none`); see [Theme transitions](#theme-transitions).
 - **Click-Through Wayland Overlay**: Transparent `WlrLayershell` overlay with mouse event pass-through mask so the HUD never intercepts cursor clicks.
-- **Engine Picker Modal**: Floating popup (`EnginePicker.qml`) to switch between Whisper, Parakeet, SenseVoice, Moonshine, and Sherpa-ONNX engines on the fly.
-- **Meeting Controls HUD**: Floating controls panel (`MeetingControls.qml`) surfacing active meeting title, duration, chunk count, and Start / Pause / Resume / Stop triggers.
+- **Engine Picker Modal** (`SUPER + E`): Floating popup (`EnginePicker.qml`) to switch between Whisper, Parakeet, SenseVoice, Moonshine, and Sherpa-ONNX engines on the fly.
+- **Meeting Controls HUD** (`SUPER + M`): Floating controls panel (`MeetingControls.qml`) surfacing active meeting title, duration, chunk count, and Start / Pause / Resume / Stop triggers.
 - **Atomic Rollback & Safety**: Full transactional backups, automated checkpoints, and clean uninstaller restoring previous configurations without leaving orphaned files.
 
 ---
@@ -115,6 +116,24 @@ peak_decay_db_per_sec = 6.0
 waveform_window_secs = 3.0
 ```
 
+### Theme transitions
+
+When the active Omarchy theme changes, the OSD plays a short Omarchy-style
+masked reveal (matching the wallpaper switch animation) instead of an
+abrupt colour flip. This is controlled entirely by `voxtype-shared/Theme.qml`
+and picked up automatically by `voxtype-shared/ThemeReveal.qml`; no config
+file changes are needed, but it can be tuned or disabled via environment
+variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `VOXTYPE_OSD_THEME_TRANSITION` | `omarchy` | Reveal style: `omarchy` (slanted band wipe), `grow` (circular reveal from centre), `wipe-right` / `wipe-left` (directional wipe), `fade` (colour crossfade, no mask reveal), or `none` (instant, no animation). Invalid values fall back to `omarchy`. |
+| `VOXTYPE_OSD_THEME_PEEK` | `1` | Set to `0` or `false` to disable the brief idle "peek" (a short fade-in/reveal/fade-out of the OSD) that confirms a theme change occurred while the OSD was hidden. |
+
+The reveal is automatically skipped (colours simply commit instantly) when
+`transitionStyle` is `fade` or `none`, or when the OSD surface isn't
+currently mapped/visible on screen.
+
 ---
 
 ## Architecture & Codebase Structure
@@ -137,6 +156,7 @@ Omarchy-VoxType-OSD/
 ├── voxtype-shared/
 │   ├── qmldir                     # QML module definition & singletons
 │   ├── Theme.qml                  # Adaptive theme singleton (Nord palette & geometry)
+│   ├── ThemeReveal.qml            # Masked reveal transition overlay for theme changes
 │   ├── StateReader.qml            # Reactive FileView state watcher ($XDG_RUNTIME_DIR/voxtype/state)
 │   └── AudioBridge.qml            # Sidecar NDJSON audio bridge process manager
 │
@@ -150,7 +170,8 @@ Omarchy-VoxType-OSD/
 │   ├── checkpoint.sh              # Checkpoint snapshot, space check, and verification
 │   ├── voxtype-config.sh          # TOML parser, modifier, and state inspector
 │   ├── qml-installer.sh           # Safe QML component installer and verifier
-│   └── service.sh                 # Systemd user service lifecycle management
+│   ├── service.sh                 # Systemd user service lifecycle management
+│   └── keybindings.sh             # SUPER+E / SUPER+M panel keybinding installer (conflict-aware)
 │
 └── tests/
     ├── run                        # Test runner script (executes all test suites)
@@ -165,6 +186,10 @@ Omarchy-VoxType-OSD/
     ├── service_test.sh            # Unit tests for service manager
     ├── setup_uninstall_test.sh    # E2E lifecycle and idempotency tests
     ├── restore_test.sh            # Recovery utility tests
+    ├── keybindings_test.sh        # Keybinding install / conflict / uninstall tests
+    ├── theme_switching_test.sh    # Live theme switching tests
+    ├── theme_transition_test.sh   # Transition commit / de-dupe / env tests
+    ├── qml_validation_test.sh     # QML lint + runtime load tests
     └── manifest_validation_test.sh# Manifest schema validation tests
 ```
 

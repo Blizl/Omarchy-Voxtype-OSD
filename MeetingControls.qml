@@ -587,6 +587,13 @@ PanelWindow {
         }
     }
 
+    // Theme-change reveal wipe over the card. Must be a sibling placed
+    // after `card` so it paints above it; grabToImage/hideSource keep
+    // keyboard and mouse input on `card` working while it's active.
+    VT.ThemeReveal {
+        target: card
+    }
+
     // ----- inline component definition: button -----
     //
     // Defined as an inline component so MeetingControls.qml stays a

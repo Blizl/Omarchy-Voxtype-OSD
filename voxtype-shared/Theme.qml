@@ -97,6 +97,90 @@ QtObject {
     /// Equalizer bar peak / highlight color.
     property color waveformPeakColor: theme.accentLightColor
 
+    // ----- Theme transition configuration -----
+
+    /// Reveal transition style applied when the Omarchy palette changes:
+    /// "omarchy" (slanted band wipe, matches Omarchy's own wallpaper reveal),
+    /// "grow" (circular reveal from centre), "wipe-right" / "wipe-left"
+    /// (directional wipe), "fade" (colour crossfade, no mask reveal),
+    /// or "none" (instant, no animation). Overridable via
+    /// $VOXTYPE_OSD_THEME_TRANSITION; invalid values fall back to "omarchy".
+    property string transitionStyle: {
+        const validStyles = ["omarchy", "grow", "wipe-right", "wipe-left", "fade", "none"];
+        const envStyle = Quickshell.env("VOXTYPE_OSD_THEME_TRANSITION");
+        if (envStyle && validStyles.indexOf(envStyle) !== -1) {
+            return envStyle;
+        }
+        return "omarchy";
+    }
+
+    /// Duration (ms) of the reveal / crossfade animation.
+    property int transitionDurationMs: 420
+
+    /// Delay (ms) before the reveal animation starts, after the snapshot is taken.
+    property int transitionDelayMs: 120
+
+    /// Whether idle surfaces should briefly "peek" (fade in, reveal, fade out)
+    /// to visually confirm a theme change occurred while the OSD was hidden.
+    /// Disable via $VOXTYPE_OSD_THEME_PEEK=0 / "false".
+    property bool themePeekEnabled: {
+        const envPeek = (Quickshell.env("VOXTYPE_OSD_THEME_PEEK") || "").trim().toLowerCase();
+        return envPeek !== "0" && envPeek !== "false";
+    }
+
+    /// Duration (ms) the idle "peek" surface stays visible.
+    property int themePeekDurationMs: 1400
+
+    /// Emitted the moment a REAL (de-duplicated) palette change is detected,
+    /// before colour properties are committed. Consumers (e.g. ThemeReveal)
+    /// may call holdCommit() synchronously from a handler of this signal to
+    /// delay the commit (e.g. to grab a "before" snapshot first).
+    signal themeAboutToChange()
+
+    /// Emitted immediately after a REAL palette change has been committed
+    /// (colour properties now reflect the new theme).
+    signal themeChanged()
+
+    /// Number of outstanding holds delaying the pending commit.
+    property int _holds: 0
+
+    /// Pending colour map awaiting commit (set between themeAboutToChange and _commit()).
+    property var _pendingMap: null
+
+    /// JSON snapshot of the last successfully applied colour map, used to
+    /// de-duplicate redundant reload()/_applyColors() calls (e.g. triggered
+    /// by OSD visibility toggles or daemon state changes touching the same theme).
+    property string _lastAppliedJson: ""
+
+    /// Fallback timer: guarantees the pending commit is applied even if a
+    /// hold is never released (e.g. a consumer errors out mid-animation).
+    property Timer _commitFallbackTimer: Timer {
+        interval: 100
+        repeat: false
+        onTriggered: {
+            if (theme._pendingMap !== null) {
+                theme._commit();
+            }
+        }
+    }
+
+    /// Delay a pending colour commit (e.g. while a reveal snapshot is taken).
+    /// Must be paired with a later releaseCommit().
+    function holdCommit() {
+        _holds++;
+    }
+
+    /// Release a previously acquired hold. Once all holds are released, the
+    /// pending colour map (if any) is committed immediately.
+    function releaseCommit() {
+        if (_holds > 0) {
+            _holds--;
+        }
+        if (_holds <= 0 && _pendingMap !== null) {
+            _commit();
+        }
+    }
+
     /// Capsule corner radius.
     property int cornerRadius: 24
 
@@ -126,6 +210,29 @@ QtObject {
 
     /// dBFS floor for peak calculations.
     property real meterFloorDbfs: -60.0
+
+    // ----- Crossfade behaviors (transitionStyle === "fade" only) -----
+    // For every other transitionStyle, ThemeReveal.qml handles the
+    // animation via a masked snapshot reveal instead, so these Behaviors
+    // stay disabled (colours flip instantly, matching the reveal's "new"
+    // side) to avoid double-animating.
+    Behavior on bgColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on borderColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on shadowColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on accentColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on accentLightColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on idleColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on recordingColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on streamingColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on transcribingColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on vadActiveColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on textColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+    Behavior on subtextColor { enabled: theme.transitionStyle === "fade"; ColorAnimation { duration: theme.transitionDurationMs; easing.type: Easing.InOutCubic } }
+
+    /// Convenience flag mirroring transitionStyle === "fade", exposed in case
+    /// a consumer wants to add its own Behavior instead of relying on the
+    /// ones declared above (e.g. to crossfade a derived/composited colour).
+    readonly property bool crossfade: transitionStyle === "fade"
 
     // ----- Live FileView Watcher for theme.name -----
     // Survives directory swaps because ~/.local/state/omarchy/current/ is not removed.
@@ -282,7 +389,33 @@ QtObject {
         }
     }
 
+    // Gate: de-dupes redundant reloads and orchestrates the two-phase
+    // (announce → hold → commit) transition sequence.
     function _applyColors(map) {
+        var mapJson = JSON.stringify(map);
+        if (mapJson === _lastAppliedJson) {
+            return;
+        }
+
+        _pendingMap = map;
+        themeAboutToChange();
+
+        if (_holds <= 0) {
+            _commit();
+        } else {
+            _commitFallbackTimer.restart();
+        }
+    }
+
+    // Applies the pending colour map (previously the entire body of
+    // _applyColors) and emits themeChanged() once colours are committed.
+    function _commit() {
+        var map = _pendingMap;
+        if (!map) {
+            return;
+        }
+        _pendingMap = null;
+
         themeMode = map["mode"] || "dark";
 
         // Background with frosted glass translucency
@@ -319,6 +452,9 @@ QtObject {
 
         waveformColor = accentColor;
         waveformPeakColor = accentLightColor;
+
+        _lastAppliedJson = JSON.stringify(map);
+        themeChanged();
     }
 
     function _loadDefaults() {

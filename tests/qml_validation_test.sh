@@ -62,6 +62,21 @@ if command -v qs >/dev/null 2>&1; then
     exit 1
   fi
   echo "  ✓ Quickshell runtime successfully loaded VoxTypeOsdOverlay.qml"
+
+  # Test EnginePicker.qml and MeetingControls.qml as standalone entry
+  # points too - each is its own PanelWindow root, and both now embed a
+  # VT.ThemeReveal sibling, so a load failure there (e.g. ThemeReveal
+  # missing/misregistered in voxtype-shared/qmldir) would otherwise only
+  # surface once a user actually opens one of the popups.
+  for widget in EnginePicker.qml MeetingControls.qml; do
+    qs_widget_output=$(timeout 2 qs -p "$ROOT/$widget" 2>&1 || true)
+    if echo "$qs_widget_output" | grep -q "ERROR: Failed to load configuration"; then
+      echo "FAIL: Quickshell failed to load $widget:" >&2
+      echo "$qs_widget_output" >&2
+      exit 1
+    fi
+    echo "  ✓ Quickshell runtime successfully loaded $widget"
+  done
 else
   echo "  - qs binary not found, skipping runtime load test"
 fi

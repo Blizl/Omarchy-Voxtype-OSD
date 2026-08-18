@@ -20,6 +20,8 @@ source "$PLUGIN_ROOT/lib/voxtype-config.sh"
 source "$PLUGIN_ROOT/lib/qml-installer.sh"
 # shellcheck disable=SC1091
 source "$PLUGIN_ROOT/lib/service.sh"
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/lib/keybindings.sh"
 
 STATE_ROOT="${BLIZL_VOXTYPE_OSD_STATE_DIR:-$HOME/.local/state/blizl.voxtype-osd}"
 CONFIG_FILE="$(voxtype_config_default_path)"
@@ -29,6 +31,9 @@ INSTALL_FILE="$STATE_ROOT/install.json"
 NON_INTERACTIVE=false
 SKIP_SERVICE=false
 DRY_RUN=false
+SKIP_KEYBINDINGS=false
+OVERRIDE_KEYBINDINGS=false
+KEYBINDINGS_INSTALLED=false
 CREATED_TRANSACTION=false
 COMMITTED=false
 
@@ -48,6 +53,10 @@ Options:
   -y, --yes          Proceed automatically without interactive prompts
   --skip-service     Skip systemd service restarts (useful for containers/testing)
   --dry-run          Show planned changes without modifying disk
+  --skip-keybindings Do not offer to add SUPER+E / SUPER+M panel keybindings
+  --override-keybindings
+                     Replace existing SUPER+E / SUPER+M bindings without asking
+                     (non-interactive runs otherwise leave conflicting keys alone)
   -h, --help         Show this help message
 USAGE
 }
@@ -67,10 +76,21 @@ confirm() {
   [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
+# Like confirm(), but non-interactive runs get the *default* answer instead of "yes"
+confirm_default() {
+  local prompt="$1" default="${2:-no}"
+  if [[ "$NON_INTERACTIVE" == true || -n "${BLIZL_VOXTYPE_CONFIRM:-}" || ! -t 0 ]]; then
+    [[ "$default" == yes ]]
+    return
+  fi
+  confirm "$prompt" "$default"
+}
+
 cleanup() {
   local status=$?
   if ((status != 0)) && [[ "$CREATED_TRANSACTION" == true && "$COMMITTED" != true ]]; then
     say "Setup encountered an error; rolling back changes..."
+    [[ "$KEYBINDINGS_INSTALLED" == true ]] && keybindings_remove "$(keybindings_file)" || true
     transaction_restore "$TRANSACTION_DIR" || {
       printf 'Error: Rollback failed.\n' >&2
     }
@@ -93,6 +113,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --skip-keybindings)
+      SKIP_KEYBINDINGS=true
+      shift
+      ;;
+    --override-keybindings)
+      OVERRIDE_KEYBINDINGS=true
       shift
       ;;
     -h | --help)
@@ -130,6 +158,7 @@ if [[ "$DRY_RUN" == true ]]; then
   say "  2. Install Quickshell OSD components into $QUICKSHELL_DIR"
   say "  3. Set [osd] frontend = 'quickshell' in $CONFIG_FILE"
   say "  4. Restart voxtype.service if currently active"
+  say "  5. Offer SUPER+E / SUPER+M keybindings in $(keybindings_file)"
   exit 0
 fi
 
@@ -172,7 +201,56 @@ if service_is_active "voxtype.service"; then
   fi
 fi
 
-# 4. Save installation record
+# 4. Optional panel keybindings (Engine Picker / Meeting Controls)
+install_keybindings() {
+  local file engine=true meeting=true engine_override=false meeting_override=false in_use
+  file="$(keybindings_file)"
+
+  [[ "$SKIP_KEYBINDINGS" == true ]] && return 0
+  if ! keybindings_supported; then
+    say "Skipping keybindings: $(dirname -- "$file") not found (not an Omarchy/Hyprland setup?)"
+    return 0
+  fi
+
+  say ""
+  if ! confirm "Add keybindings ${KEYBIND_ENGINE_KEYS} (Engine Picker) and ${KEYBIND_MEETING_KEYS} (Meeting Controls) to $file?"; then
+    say "Skipping keybindings. You can add them later:"
+    say "  o.bind(\"${KEYBIND_ENGINE_KEYS}\", \"VoxType engine picker\", \"${KEYBIND_ENGINE_CMD}\")"
+    say "  o.bind(\"${KEYBIND_MEETING_KEYS}\", \"VoxType meeting controls\", \"${KEYBIND_MEETING_CMD}\")"
+    return 0
+  fi
+
+  if in_use="$(keybinding_in_use "$KEYBIND_ENGINE_KEYS" "$file")"; then
+    say "${KEYBIND_ENGINE_KEYS} is already bound: ${in_use}"
+    if [[ "$OVERRIDE_KEYBINDINGS" == true ]] || confirm_default "Override ${KEYBIND_ENGINE_KEYS} with the VoxType Engine Picker?" no; then
+      engine_override=true
+    else
+      engine=false
+      say "Leaving ${KEYBIND_ENGINE_KEYS} unchanged (re-run with --override-keybindings to replace it)."
+    fi
+  fi
+  if in_use="$(keybinding_in_use "$KEYBIND_MEETING_KEYS" "$file")"; then
+    say "${KEYBIND_MEETING_KEYS} is already bound: ${in_use}"
+    if [[ "$OVERRIDE_KEYBINDINGS" == true ]] || confirm_default "Override ${KEYBIND_MEETING_KEYS} with the VoxType Meeting Controls?" no; then
+      meeting_override=true
+    else
+      meeting=false
+      say "Leaving ${KEYBIND_MEETING_KEYS} unchanged (re-run with --override-keybindings to replace it)."
+    fi
+  fi
+
+  if [[ "$engine" == true || "$meeting" == true ]]; then
+    keybindings_install "$file" "$engine" "$engine_override" "$meeting" "$meeting_override"
+    KEYBINDINGS_INSTALLED=true
+    keybindings_reload
+    [[ "$engine" == true ]] && say "Bound ${KEYBIND_ENGINE_KEYS} -> Engine Picker"
+    [[ "$meeting" == true ]] && say "Bound ${KEYBIND_MEETING_KEYS} -> Meeting Controls"
+  fi
+  return 0
+}
+install_keybindings
+
+# 5. Save installation record
 cat <<EOF >"$INSTALL_FILE"
 {
   "version": 1,
@@ -181,7 +259,8 @@ cat <<EOF >"$INSTALL_FILE"
   "checkpointId": "$checkpoint_id",
   "configFile": "$CONFIG_FILE",
   "quickshellDir": "$QUICKSHELL_DIR",
-  "serviceWasActive": $service_was_active
+  "serviceWasActive": $service_was_active,
+  "keybindingsInstalled": $KEYBINDINGS_INSTALLED
 }
 EOF
 
@@ -196,4 +275,7 @@ say "  - Modern floating capsule HUD with Omarchy Nord styling"
 say "  - Real-time animated equalizer bars with audio peak detection"
 say "  - State indicators for recording, streaming, and transcription"
 say "  - Elapsed timer & VAD halo indicators"
+if [[ "$KEYBINDINGS_INSTALLED" == true ]]; then
+  say "  - ${KEYBIND_ENGINE_KEYS}: Engine Picker, ${KEYBIND_MEETING_KEYS}: Meeting Controls"
+fi
 say ""

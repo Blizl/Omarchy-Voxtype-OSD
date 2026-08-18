@@ -23,7 +23,14 @@ PanelWindow {
 
     /// Visibility flag
     readonly property bool isStateActive: daemonState !== "idle" && daemonState !== ""
-    visible: isStateActive || container.opacity > 0.01
+
+    /// True while showing a brief "theme peek" - a confirmation glimpse
+    /// of the idle/"Ready" pill in the newly-applied theme, shown after
+    /// a real (de-duplicated) Omarchy theme change even though the OSD
+    /// isn't otherwise active. Never overrides a genuinely active state.
+    property bool themePeek: false
+
+    visible: isStateActive || themePeek || container.opacity > 0.01
 
     anchors {
         top: true
@@ -112,7 +119,42 @@ PanelWindow {
     onIsStateActiveChanged: {
         if (isStateActive) {
             VT.Theme.reload();
+            // A genuine daemon state change always takes precedence
+            // over a theme peek: stop the peek timer so it can't later
+            // hide a surface that's now visible for a real reason, and
+            // drop the flag since visibility is already covered by
+            // isStateActive.
+            if (panel.themePeek) {
+                themePeekTimer.stop();
+                panel.themePeek = false;
+            }
         }
+    }
+
+    // Theme-change confirmation peek: briefly show the idle pill (with
+    // the newly-applied theme colours) even when the OSD would
+    // otherwise stay hidden, so the user gets visual confirmation the
+    // Omarchy theme switch landed. Only fires on a real, de-duplicated
+    // theme commit (Theme.themeChanged), never during unrelated
+    // reload() calls (which don't touch that signal). ThemeReveal isn't
+    // used for the peek itself - the window isn't mapped yet at
+    // themeAboutToChange time, so there's no "old" snapshot to wipe
+    // from; this is a plain fade-in of the new-theme idle appearance.
+    Connections {
+        target: VT.Theme
+        function onThemeChanged() {
+            if (!VT.Theme.themePeekEnabled) return;
+            if (panel.isStateActive) return; // real state already visible; don't interfere
+            panel.themePeek = true;
+            themePeekTimer.restart();
+        }
+    }
+
+    Timer {
+        id: themePeekTimer
+        interval: VT.Theme.themePeekDurationMs || 1400
+        repeat: false
+        onTriggered: panel.themePeek = false
     }
 
     // Audio bridge listener
@@ -171,8 +213,12 @@ PanelWindow {
         width: VT.Theme.defaultWidthPx || 320
         height: VT.Theme.defaultHeightPx || 48
 
-        opacity: panel.isStateActive ? (VT.Theme.defaultOpacity || 0.96) : 0.0
-        scale: panel.isStateActive ? 1.0 : 0.88
+        // themePeek reuses the same show/hide animation as a real
+        // state, just displaying the idle content (daemonState stays
+        // "idle" while peeking, so the pill naturally renders "Ready").
+        readonly property bool shown: panel.isStateActive || panel.themePeek
+        opacity: container.shown ? (VT.Theme.defaultOpacity || 0.96) : 0.0
+        scale: container.shown ? 1.0 : 0.88
 
         Behavior on opacity {
             NumberAnimation { duration: 180; easing.type: Easing.OutQuad }
@@ -181,246 +227,264 @@ PanelWindow {
             NumberAnimation { duration: 220; easing.type: Easing.OutBack; easing.overshoot: 1.15 }
         }
 
-        // Ambient outer glow aura
-        Rectangle {
-            anchors.fill: pillBg
-            anchors.margins: -3
-            radius: pillBg.radius + 3
-            color: "transparent"
-            border.color: (panel.daemonState === "transcribing") ? VT.Theme.transcribingColor : panel.stateColor
-            border.width: 1
-            opacity: panel.daemonState === "recording" ? 0.25 : (panel.isStateActive ? 0.15 : 0.0)
-            z: 0
+        // Capsule wrapper: geometry includes the outer aura halo so
+        // ThemeReveal's grabToImage() captures the glow, not just the
+        // pill body (an Item's own rect clips what grabToImage sees).
+        Item {
+            id: capsule
+            anchors.centerIn: parent
+            width: parent.width + 8
+            height: parent.height + 8
 
-            Behavior on opacity {
-                NumberAnimation { duration: 200 }
+            // Ambient outer glow aura
+            Rectangle {
+                anchors.fill: pillBg
+                anchors.margins: -3
+                radius: pillBg.radius + 3
+                color: "transparent"
+                border.color: (panel.daemonState === "transcribing") ? VT.Theme.transcribingColor : panel.stateColor
+                border.width: 1
+                opacity: panel.daemonState === "recording" ? 0.25 : (panel.isStateActive ? 0.15 : 0.0)
+                z: 0
+
+                Behavior on opacity {
+                    NumberAnimation { duration: 200 }
+                }
+                Behavior on border.color {
+                    ColorAnimation { duration: 200 }
+                }
             }
-            Behavior on border.color {
-                ColorAnimation { duration: 200 }
-            }
-        }
 
-        // Capsule Background (Frosted Glass)
-        Rectangle {
-            id: pillBg
-            anchors.fill: parent
-            radius: VT.Theme.cornerRadius || 24
-            color: VT.Theme.bgColor
-            border.color: VT.Theme.borderColor
-            border.width: 1
-            z: 1
-
-            // Inner Capsule Layout
-            Row {
+            // Capsule Background (Frosted Glass)
+            Rectangle {
+                id: pillBg
                 anchors.fill: parent
-                anchors.leftMargin: VT.Theme.padding || 16
-                anchors.rightMargin: VT.Theme.padding || 16
-                spacing: 12
+                anchors.margins: 4
+                radius: VT.Theme.cornerRadius || 24
+                color: VT.Theme.bgColor
+                border.color: VT.Theme.borderColor
+                border.width: 1
+                z: 1
 
-                // Left: Minimalist State Glyph (No Red Button)
-                Item {
-                    id: stateGlyphContainer
-                    width: 20
-                    height: 20
-                    anchors.verticalCenter: parent.verticalCenter
+                // Inner Capsule Layout
+                Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: VT.Theme.padding || 16
+                    anchors.rightMargin: VT.Theme.padding || 16
+                    spacing: 12
 
-                    // Subtle VAD soft aura (only when speaking)
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: 18
-                        height: 18
-                        radius: 9
-                        color: (panel.audio && panel.audio.vad) ? VT.Theme.vadActiveColor : panel.stateColor
-                        opacity: (panel.audio && panel.audio.vad) ? 0.22 : 0.0
-                        scale: (panel.audio && panel.audio.vad) ? 1.25 : 1.0
+                    // Left: Minimalist State Glyph (No Red Button)
+                    Item {
+                        id: stateGlyphContainer
+                        width: 20
+                        height: 20
+                        anchors.verticalCenter: parent.verticalCenter
 
-                        Behavior on opacity { NumberAnimation { duration: 150 } }
-                        Behavior on scale { NumberAnimation { duration: 200 } }
-                    }
+                        // Subtle VAD soft aura (only when speaking)
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 18
+                            height: 18
+                            radius: 9
+                            color: (panel.audio && panel.audio.vad) ? VT.Theme.vadActiveColor : panel.stateColor
+                            opacity: (panel.audio && panel.audio.vad) ? 0.22 : 0.0
+                            scale: (panel.audio && panel.audio.vad) ? 1.25 : 1.0
 
-                    // Minimalist Vector Microphone Glyph
-                    Canvas {
-                        id: micGlyphCanvas
-                        anchors.centerIn: parent
-                        width: 16
-                        height: 16
-                        visible: panel.daemonState === "recording" || panel.daemonState === "streaming"
-                        opacity: visible ? 1.0 : 0.0
+                            Behavior on opacity { NumberAnimation { duration: 150 } }
+                            Behavior on scale { NumberAnimation { duration: 200 } }
+                        }
 
-                        readonly property color glyphColor: (panel.audio && panel.audio.vad)
-                            ? VT.Theme.vadActiveColor
-                            : VT.Theme.accentColor
+                        // Minimalist Vector Microphone Glyph
+                        Canvas {
+                            id: micGlyphCanvas
+                            anchors.centerIn: parent
+                            width: 16
+                            height: 16
+                            visible: panel.daemonState === "recording" || panel.daemonState === "streaming"
+                            opacity: visible ? 1.0 : 0.0
 
-                        onGlyphColorChanged: requestPaint()
+                            readonly property color glyphColor: (panel.audio && panel.audio.vad)
+                                ? VT.Theme.vadActiveColor
+                                : VT.Theme.accentColor
 
-                        onPaint: {
-                            var ctx = getContext("2d");
-                            ctx.reset();
-                            ctx.strokeStyle = glyphColor;
-                            ctx.fillStyle = glyphColor;
-                            ctx.lineWidth = 1.4;
-                            ctx.lineCap = "round";
-                            ctx.lineJoin = "round";
+                            onGlyphColorChanged: requestPaint()
 
-                            // Mic Capsule
-                            ctx.beginPath();
-                            if (ctx.roundRect) {
-                                ctx.roundRect(5.5, 2, 5, 8, 2.5);
-                            } else {
-                                ctx.rect(5.5, 2, 5, 8);
+                            onPaint: {
+                                var ctx = getContext("2d");
+                                ctx.reset();
+                                ctx.strokeStyle = glyphColor;
+                                ctx.fillStyle = glyphColor;
+                                ctx.lineWidth = 1.4;
+                                ctx.lineCap = "round";
+                                ctx.lineJoin = "round";
+
+                                // Mic Capsule
+                                ctx.beginPath();
+                                if (ctx.roundRect) {
+                                    ctx.roundRect(5.5, 2, 5, 8, 2.5);
+                                } else {
+                                    ctx.rect(5.5, 2, 5, 8);
+                                }
+                                ctx.fill();
+
+                                // Mic Cradle U-arc
+                                ctx.beginPath();
+                                ctx.arc(8, 6.5, 4.5, 0, Math.PI, false);
+                                ctx.stroke();
+
+                                // Mic Stem & Base
+                                ctx.beginPath();
+                                ctx.moveTo(8, 11);
+                                ctx.lineTo(8, 14);
+                                ctx.moveTo(5.5, 14);
+                                ctx.lineTo(10.5, 14);
+                                ctx.stroke();
                             }
-                            ctx.fill();
+                        }
 
-                            // Mic Cradle U-arc
-                            ctx.beginPath();
-                            ctx.arc(8, 6.5, 4.5, 0, Math.PI, false);
-                            ctx.stroke();
+                        // Transcribing Harmonic Dot Indicator
+                        Item {
+                            id: transcribingDots
+                            anchors.fill: parent
+                            visible: panel.daemonState === "transcribing"
+                            opacity: visible ? 1.0 : 0.0
 
-                            // Mic Stem & Base
-                            ctx.beginPath();
-                            ctx.moveTo(8, 11);
-                            ctx.lineTo(8, 14);
-                            ctx.moveTo(5.5, 14);
-                            ctx.lineTo(10.5, 14);
-                            ctx.stroke();
+                            Row {
+                                anchors.centerIn: parent
+                                spacing: 2
+                                Repeater {
+                                    model: 3
+                                    Rectangle {
+                                        required property int index
+                                        width: 3
+                                        height: 3
+                                        radius: 1.5
+                                        color: VT.Theme.transcribingColor
+                                        opacity: 0.35 + 0.65 * Math.abs(Math.sin(panel.transcribePhase + index * 0.8))
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    // Transcribing Harmonic Dot Indicator
+                    // Middle: Visualizer Area (Equalizer or Traveling Sine Wave)
                     Item {
-                        id: transcribingDots
-                        anchors.fill: parent
-                        visible: panel.daemonState === "transcribing"
-                        opacity: visible ? 1.0 : 0.0
+                        id: visualizerArea
+                        height: 28
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - stateGlyphContainer.width - rightLabel.width - (parent.spacing * 2)
 
+                        // Equalizer bars (during Recording or Streaming)
                         Row {
+                            id: eqRow
                             anchors.centerIn: parent
-                            spacing: 2
+                            spacing: 3
+                            visible: panel.daemonState === "recording" || panel.daemonState === "streaming"
+                            opacity: visible ? 1.0 : 0.0
+
                             Repeater {
-                                model: 3
+                                model: panel.barCount
                                 Rectangle {
                                     required property int index
                                     width: 3
-                                    height: 3
+                                    height: panel.barHeights[index] !== undefined ? panel.barHeights[index] : 4
                                     radius: 1.5
-                                    color: VT.Theme.transcribingColor
-                                    opacity: 0.35 + 0.65 * Math.abs(Math.sin(panel.transcribePhase + index * 0.8))
+                                    color: (index === 7 || index === 8) ? VT.Theme.waveformPeakColor : VT.Theme.waveformColor
+                                    anchors.verticalCenter: parent.verticalCenter
+
+                                    Behavior on height {
+                                        NumberAnimation { duration: 60; easing.type: Easing.OutQuad }
+                                    }
                                 }
                             }
                         }
-                    }
-                }
 
-                // Middle: Visualizer Area (Equalizer or Traveling Sine Wave)
-                Item {
-                    id: visualizerArea
-                    height: 28
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - stateGlyphContainer.width - rightLabel.width - (parent.spacing * 2)
+                        // Traveling Sine Wave (during Transcribing)
+                        Row {
+                            id: transcribeWaveRow
+                            anchors.centerIn: parent
+                            spacing: 4
+                            visible: panel.daemonState === "transcribing"
+                            opacity: visible ? 1.0 : 0.0
 
-                    // Equalizer bars (during Recording or Streaming)
-                    Row {
-                        id: eqRow
-                        anchors.centerIn: parent
-                        spacing: 3
-                        visible: panel.daemonState === "recording" || panel.daemonState === "streaming"
-                        opacity: visible ? 1.0 : 0.0
+                            Repeater {
+                                model: 12
+                                Rectangle {
+                                    required property int index
+                                    width: 4
+                                    radius: 2
+                                    anchors.verticalCenter: parent.verticalCenter
 
-                        Repeater {
-                            model: panel.barCount
-                            Rectangle {
-                                required property int index
-                                width: 3
-                                height: panel.barHeights[index] !== undefined ? panel.barHeights[index] : 4
-                                radius: 1.5
-                                color: (index === 7 || index === 8) ? VT.Theme.waveformPeakColor : VT.Theme.waveformColor
-                                anchors.verticalCenter: parent.verticalCenter
+                                    readonly property real waveVal: Math.sin(panel.transcribePhase + (index * 0.55))
+                                    height: 4 + Math.abs(waveVal) * 18
+                                    color: Qt.tint(VT.Theme.transcribingColor, Qt.rgba(1.0, 1.0, 1.0, (index / 12.0) * 0.25))
 
-                                Behavior on height {
-                                    NumberAnimation { duration: 60; easing.type: Easing.OutQuad }
+                                    Behavior on height {
+                                        NumberAnimation { duration: 30 }
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    // Traveling Sine Wave (during Transcribing)
-                    Row {
-                        id: transcribeWaveRow
-                        anchors.centerIn: parent
-                        spacing: 4
-                        visible: panel.daemonState === "transcribing"
-                        opacity: visible ? 1.0 : 0.0
-
-                        Repeater {
-                            model: 12
-                            Rectangle {
-                                required property int index
-                                width: 4
-                                radius: 2
-                                anchors.verticalCenter: parent.verticalCenter
-
-                                readonly property real waveVal: Math.sin(panel.transcribePhase + (index * 0.55))
-                                height: 4 + Math.abs(waveVal) * 18
-                                color: Qt.tint(VT.Theme.transcribingColor, Qt.rgba(1.0, 1.0, 1.0, (index / 12.0) * 0.25))
-
-                                Behavior on height {
-                                    NumberAnimation { duration: 30 }
+                        // Idle placeholder dots
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 6
+                            visible: panel.daemonState === "idle" || panel.daemonState === ""
+                            opacity: 0.4
+                            Repeater {
+                                model: 5
+                                Rectangle {
+                                    width: 4
+                                    height: 4
+                                    radius: 2
+                                    color: VT.Theme.idleColor
+                                    anchors.verticalCenter: parent.verticalCenter
                                 }
                             }
                         }
                     }
 
-                    // Idle placeholder dots
-                    Row {
-                        anchors.centerIn: parent
-                        spacing: 6
-                        visible: panel.daemonState === "idle" || panel.daemonState === ""
-                        opacity: 0.4
-                        Repeater {
-                            model: 5
-                            Rectangle {
-                                width: 4
-                                height: 4
-                                radius: 2
-                                color: VT.Theme.idleColor
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-                    }
-                }
-
-                // Right: Status Text or Duration Timer
-                Item {
-                    id: rightLabel
-                    width: Math.max(68, statusText.implicitWidth)
-                    height: 24
-                    anchors.verticalCenter: parent.verticalCenter
-
-                    Text {
-                        id: statusText
-                        anchors.right: parent.right
+                    // Right: Status Text or Duration Timer
+                    Item {
+                        id: rightLabel
+                        width: Math.max(68, statusText.implicitWidth)
+                        height: 24
                         anchors.verticalCenter: parent.verticalCenter
-                        text: {
-                            if (panel.daemonState === "recording") {
-                                return panel.formatTime(panel.elapsedSeconds);
-                            } else if (panel.daemonState === "transcribing") {
-                                return "Transcribing...";
-                            } else if (panel.daemonState === "streaming") {
-                                return "Streaming";
-                            } else {
-                                return "Ready";
+
+                        Text {
+                            id: statusText
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: {
+                                if (panel.daemonState === "recording") {
+                                    return panel.formatTime(panel.elapsedSeconds);
+                                } else if (panel.daemonState === "transcribing") {
+                                    return "Transcribing...";
+                                } else if (panel.daemonState === "streaming") {
+                                    return "Streaming";
+                                } else {
+                                    return "Ready";
+                                }
                             }
+                            color: (panel.daemonState === "recording") ? VT.Theme.textColor
+                                 : (panel.daemonState === "transcribing") ? VT.Theme.transcribingColor
+                                 : VT.Theme.subtextColor
+                            font.pixelSize: (panel.daemonState === "recording") ? 13 : 11
+                            font.weight: (panel.daemonState === "recording") ? Font.DemiBold : Font.Medium
+                            font.family: "Sans Serif"
+                            horizontalAlignment: Text.AlignRight
                         }
-                        color: (panel.daemonState === "recording") ? VT.Theme.textColor
-                             : (panel.daemonState === "transcribing") ? VT.Theme.transcribingColor
-                             : VT.Theme.subtextColor
-                        font.pixelSize: (panel.daemonState === "recording") ? 13 : 11
-                        font.weight: (panel.daemonState === "recording") ? Font.DemiBold : Font.Medium
-                        font.family: "Sans Serif"
-                        horizontalAlignment: Text.AlignRight
                     }
                 }
-            }
+            } // pillBg
+        } // capsule
+
+        // Theme-change reveal wipe, anchored over the capsule (aura +
+        // pill). Must come after `capsule` in this same parent so it
+        // paints above it.
+        VT.ThemeReveal {
+            target: capsule
         }
     }
 }

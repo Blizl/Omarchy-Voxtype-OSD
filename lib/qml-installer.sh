@@ -20,6 +20,7 @@ qml_managed_files() {
     "MeetingControls.qml" \
     "voxtype-shared/qmldir" \
     "voxtype-shared/Theme.qml" \
+    "voxtype-shared/ThemeReveal.qml" \
     "voxtype-shared/StateReader.qml" \
     "voxtype-shared/AudioBridge.qml"
 }

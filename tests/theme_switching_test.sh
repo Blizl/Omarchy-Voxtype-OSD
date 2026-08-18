@@ -48,7 +48,7 @@ simulate_omarchy_theme_set() {
   if [[ -f "$src_colors" ]]; then
     cp "$src_colors" "$NEXT_THEME_DIR/colors.toml"
   else
-    cat <<EOF > "$NEXT_THEME_DIR/colors.toml"
+    cat <<EOF >"$NEXT_THEME_DIR/colors.toml"
 mode = "$expected_mode"
 accent = "$expected_accent"
 selection = "#434c5e"
@@ -64,14 +64,14 @@ EOF
   mv "$NEXT_THEME_DIR" "$THEME_DIR"
 
   # Update theme.name (rewritten in place)
-  echo "$theme_name" > "$STATE_DIR/theme.name"
+  echo "$theme_name" >"$STATE_DIR/theme.name"
 }
 
 # ------------------------------------------------------------------------------
 # Test 1: Static Parsing Verification for All Diverse Themes
 # ------------------------------------------------------------------------------
 for entry in "${THEMES[@]}"; do
-  IFS=":" read -r theme_name accent_col theme_mode <<< "$entry"
+  IFS=":" read -r theme_name accent_col theme_mode <<<"$entry"
   simulate_omarchy_theme_set "$theme_name" "$accent_col" "$theme_mode"
 
   assert_file_exists "$THEME_DIR/colors.toml"
@@ -91,7 +91,7 @@ if command -v qs >/dev/null 2>&1; then
 
   # Create a test harness QML that imports Theme and logs color changes
   HARNESS_QML="$WORK_DIR/theme_harness.qml"
-  cat <<'EOF' > "$HARNESS_QML"
+  cat <<'EOF' >"$HARNESS_QML"
 import QtQuick
 import Quickshell
 import "voxtype-shared" as VT
@@ -121,14 +121,14 @@ EOF
   OUTPUT_LOG="$WORK_DIR/qs_theme_test.log"
 
   # Launch Quickshell in background
-  qs -p "$HARNESS_QML" > "$OUTPUT_LOG" 2>&1 &
+  qs -p "$HARNESS_QML" >"$OUTPUT_LOG" 2>&1 &
   QS_PID=$!
 
   sleep 0.8
 
   # Perform dynamic switching across all themes in sequence
   for entry in "${THEMES[@]}"; do
-    IFS=":" read -r theme_name accent_col theme_mode <<< "$entry"
+    IFS=":" read -r theme_name accent_col theme_mode <<<"$entry"
     simulate_omarchy_theme_set "$theme_name" "$accent_col" "$theme_mode"
     sleep 0.25
   done
@@ -140,7 +140,7 @@ EOF
   LOG_CONTENT="$(cat "$OUTPUT_LOG" 2>/dev/null || true)"
 
   for entry in "${THEMES[@]}"; do
-    IFS=":" read -r theme_name _ _ <<< "$entry"
+    IFS=":" read -r theme_name _ _ <<<"$entry"
     # Verify that either INITIAL_THEME or ACCENT_CHANGED logged this theme
     if ! echo "$LOG_CONTENT" | grep -qE "(ACCENT_CHANGED|INITIAL_THEME):$theme_name:"; then
       echo "Quickshell Output Log:" >&2

@@ -24,6 +24,12 @@ A floating, click-through voice HUD for [VoxType](https://github.com/Blizl/voxty
 - **Meeting Controls HUD** (`SUPER + M`): Floating controls panel (`MeetingControls.qml`) surfacing active meeting title, duration, chunk count, and Start / Pause / Resume / Stop triggers.
 - **Atomic Rollback & Safety**: Full transactional backups, automated checkpoints, and clean uninstaller restoring previous configurations without leaving orphaned files.
 
+### Engine Picker & Meeting Controls
+
+![Engine Picker and Meeting Controls Demo](assets/voxtype-osd-panels.gif)
+
+The `SUPER + E` engine picker and `SUPER + M` meeting controls panel float over the desktop the same way the OSD does, and pick up theme changes live too.
+
 ---
 
 ## Installation

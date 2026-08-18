@@ -1,6 +1,6 @@
 # VoxType OSD HUD for Omarchy Quattro
 
-A floating, click-through voice HUD for [VoxType](https://github.com/Blizl/voxtype) that automatically matches your Omarchy theme, with a smooth animated reveal on every theme switch.
+A floating, click-through voice HUD for [VoxType](https://voxtype.io) that automatically matches your Omarchy theme, with a smooth animated reveal on every theme switch.
 
 ![VoxType OSD Demo](assets/voxtype-osd-demo.gif)
 

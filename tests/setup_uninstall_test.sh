@@ -81,9 +81,45 @@ test_setup_creates_fresh_environment() {
   pass "Setup and uninstall work cleanly in fresh/empty environment"
 }
 
+test_uninstall_after_reinstall_restores_original_baseline() {
+  make_temp_home
+  cp "$TESTS_DIR/fixtures/sample_config.toml" "$VOXTYPE_CONFIG_FILE"
+  local original_config_content
+  original_config_content="$(<"$VOXTYPE_CONFIG_FILE")"
+
+  # Install twice (the second run backs up an already-installed state)
+  "$PROJECT_ROOT/bin/setup" --yes --skip-service
+  "$PROJECT_ROOT/bin/setup" --yes --skip-service
+  assert_eq "$(jq -r .baselineTransaction "$BLIZL_VOXTYPE_OSD_STATE_DIR/install.json")" \
+    "$(find "$BLIZL_VOXTYPE_OSD_STATE_DIR/backups" -mindepth 1 -maxdepth 1 -type d | sort | head -n1)" "baseline points at the FIRST install's backup"
+
+  "$PROJECT_ROOT/bin/uninstall" --skip-service
+  assert_path_not_exists "$VOXTYPE_QUICKSHELL_DIR/shell.qml"
+  assert_eq "$(<"$VOXTYPE_CONFIG_FILE")" "$original_config_content" "config.toml restored to pre-FIRST-install content"
+  pass "Uninstall after a re-install restores the original pre-plugin baseline"
+}
+
+test_uninstall_preserves_user_edits_outside_osd() {
+  make_temp_home
+  cp "$TESTS_DIR/fixtures/sample_config.toml" "$VOXTYPE_CONFIG_FILE"
+  "$PROJECT_ROOT/bin/setup" --yes --skip-service
+
+  # User edits another section after installing
+  printf '\n[hotkey]\nenabled = false\n' >>"$VOXTYPE_CONFIG_FILE"
+
+  "$PROJECT_ROOT/bin/uninstall" --skip-service
+  assert_contains "$(<"$VOXTYPE_CONFIG_FILE")" '[hotkey]' "user's post-install [hotkey] edit survives uninstall"
+  assert_eq "$(voxtype_config_get_value "$VOXTYPE_CONFIG_FILE" "osd" "frontend" 2>/dev/null || true)" \
+    "$(voxtype_config_get_value "$TESTS_DIR/fixtures/sample_config.toml" "osd" "frontend" 2>/dev/null || true)" "[osd] frontend back to baseline"
+  assert_not_contains "$(<"$VOXTYPE_CONFIG_FILE")" 'frontend = "quickshell"' "quickshell frontend removed"
+  pass "Uninstall reverts only [osd] and keeps other user edits"
+}
+
 # Run tests
 printf 'Running setup_uninstall_test.sh:\n'
 test_setup_uninstall_round_trip
 test_setup_idempotency
 test_setup_creates_fresh_environment
+test_uninstall_after_reinstall_restores_original_baseline
+test_uninstall_preserves_user_edits_outside_osd
 printf 'All setup/uninstall lifecycle tests passed.\n'

@@ -183,10 +183,19 @@ fi
 
 say "Starting installation..."
 
+# Preserve the ORIGINAL pre-install baseline across re-runs: uninstall must
+# restore the state from before the first install, not from before this run.
+BASELINE_TRANSACTION=""
+if [[ -f "$INSTALL_FILE" ]] && command -v jq >/dev/null 2>&1; then
+  BASELINE_TRANSACTION="$(jq -r '.baselineTransaction // .transaction // ""' "$INSTALL_FILE" 2>/dev/null || true)"
+  [[ -n "$BASELINE_TRANSACTION" && -f "$BASELINE_TRANSACTION/targets.tsv" ]] || BASELINE_TRANSACTION=""
+fi
+
 # Initialize transaction and checkpoint
 mkdir -p -- "$STATE_ROOT"
 transaction_begin "$STATE_ROOT"
 CREATED_TRANSACTION=true
+[[ -n "$BASELINE_TRANSACTION" ]] || BASELINE_TRANSACTION="$TRANSACTION_DIR"
 
 # Back up targets
 transaction_backup "$CONFIG_FILE"
@@ -269,6 +278,7 @@ cat <<EOF >"$INSTALL_FILE"
   "version": 1,
   "installedAt": "$(date -u +%Y%m%dT%H%M%SZ)",
   "transaction": "$TRANSACTION_DIR",
+  "baselineTransaction": "$BASELINE_TRANSACTION",
   "checkpointId": "$checkpoint_id",
   "configFile": "$CONFIG_FILE",
   "quickshellDir": "$QUICKSHELL_DIR",

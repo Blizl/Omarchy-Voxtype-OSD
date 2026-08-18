@@ -93,7 +93,7 @@ From the cloned repository:
 ./bin/uninstall
 ```
 
-Both paths restore previous configurations byte-for-byte and remove only what setup installed.
+Both paths revert only what setup changed: the `[osd]` section of `config.toml` goes back to its pre-install content (any other edits you made since are kept), the installed Quickshell files and the keybinding block are removed. Re-running `bin/setup` (e.g. after an update) keeps the original pre-install baseline, so uninstalling later still returns you to where you started.
 
 ### Recovery Utility
 
@@ -258,7 +258,7 @@ omarchy plugin validate .
 | No symlinks in repository | ✅ | 100% regular files and directories |
 | User confirmation before mutation | ✅ | `bin/setup` prompts before changing config or keybindings; without a TTY it refuses unless `--yes` is passed explicitly; existing keybindings are never overridden without a "yes" |
 | Automated rollback on error | ✅ | Trap-based atomic transaction restoration on any failure |
-| Clean uninstaller | ✅ | `bin/uninstall` restores pre-install config and removes files |
+| Clean uninstaller | ✅ | `bin/uninstall` restores the state from before the *first* install (baseline carried across re-runs), reverting only the `[osd]` section so later user edits to `config.toml` survive; removes installed files and keybindings |
 | Idempotency | ✅ | Setup can be run repeatedly without duplicate entries or drift |
 | Isolated unit test suite | ✅ | `tests/run` executes 12 test suites with mock `$HOME` environments |
 | Dependencies & license documented | ✅ | See [Requirements](#requirements) and [License](#license) (MIT) |

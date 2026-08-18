@@ -296,6 +296,74 @@ voxtype_config_disable_osd() {
 }
 
 # Print human-readable summary of OSD configuration
+# Restore only the [osd] section from a baseline copy of config.toml, keeping
+# every other section of the *current* file untouched (so user edits made after
+# installation survive an uninstall).
+# Arguments:
+#   $1 - current config file
+#   $2 - baseline config file (may be empty/non-existent: [osd] is then removed)
+voxtype_config_restore_osd_section() {
+  local config_file="$1" baseline_file="${2:-}"
+
+  [[ -f "$config_file" ]] || return "$VOXTYPE_CONFIG_NO_CHANGE"
+
+  local temporary
+  temporary="$(mktemp "${config_file}.tmp.XXXXXX")" || return "$VOXTYPE_CONFIG_ERROR"
+
+  perl -e '
+    use strict;
+    use warnings;
+
+    my ($current, $baseline) = @ARGV;
+
+    # Split a file into (before-osd, osd-block, after-osd)
+    sub split_osd {
+      my ($path) = @_;
+      my (@before, @osd, @after);
+      my $state = "before";
+      return (\@before, \@osd, \@after) unless defined $path && -f $path;
+      open my $fh, "<", $path or die $!;
+      while (my $line = <$fh>) {
+        if ($line =~ /^\s*\[([^\]]+)\]/) {
+          if ($1 eq "osd" && $state eq "before") { $state = "osd"; push @osd, $line; next; }
+          if ($state eq "osd") { $state = "after"; }
+        }
+        if ($state eq "before") { push @before, $line; }
+        elsif ($state eq "osd") { push @osd, $line; }
+        else { push @after, $line; }
+      }
+      close $fh;
+      return (\@before, \@osd, \@after);
+    }
+
+    my ($cb, $co, $ca) = split_osd($current);
+    my (undef, $bo, undef) = split_osd($baseline);
+
+    my @out;
+    if (@$bo) {
+      # Baseline had an [osd] section: put it back where the current one is
+      if (@$co) { @out = (@$cb, @$bo, @$ca); }
+      else      { @out = (@$cb, ("\n"), @$bo, @$ca); }
+    } else {
+      # Baseline had no [osd]: drop the current one (and the blank line setup added before it)
+      if (@$co && @$cb && $cb->[-1] =~ /^\s*$/) { pop @$cb; }
+      @out = (@$cb, @$ca);
+    }
+    print join("", @out);
+  ' "$config_file" "$baseline_file" >"$temporary"
+
+  chmod --reference="$config_file" "$temporary" 2>/dev/null || chmod 644 "$temporary"
+  mv -- "$temporary" "$config_file"
+
+  # If setup created the file from scratch and nothing else was ever added, remove it
+  if [[ ! -f "$baseline_file" ]]; then
+    local remaining
+    remaining="$(grep -vE '^\s*(#.*)?$' "$config_file" || true)"
+    [[ -z "$remaining" ]] && rm -f -- "$config_file"
+  fi
+  return "$VOXTYPE_CONFIG_OK"
+}
+
 voxtype_config_summary() {
   local config_file="${1:-$(voxtype_config_default_path)}"
 

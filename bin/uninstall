@@ -53,26 +53,64 @@ remove_keybindings() {
   fi
 }
 
+CONFIG_FILE="$(voxtype_config_default_path)"
+QUICKSHELL_DIR="$(qml_target_dir)"
+
 if [[ ! -f "$INSTALL_FILE" ]]; then
   echo "No blizl.voxtype-osd installation record found. Running clean-up..."
-  qml_uninstall "$(qml_target_dir)"
+  qml_uninstall "$QUICKSHELL_DIR"
+  voxtype_config_disable_osd "$CONFIG_FILE" || true
   remove_keybindings
+  service_restart_if_active "voxtype.service" || true
+  echo "VoxType OSD HUD has been cleanly uninstalled."
   exit 0
 fi
 
-transaction_dir="$(jq -r '.transaction // ""' "$INSTALL_FILE")"
+# Restore from the ORIGINAL pre-install baseline (carried across re-runs of setup)
+transaction_dir="$(jq -r '.baselineTransaction // .transaction // ""' "$INSTALL_FILE")"
 service_was_active="$(jq -r '.serviceWasActive // false' "$INSTALL_FILE")"
 
 echo "Uninstalling VoxType OSD HUD..."
 
-# Restore files from recorded transaction backup
+restore_from_baseline() {
+  local base="$1" state target
+  while IFS=$'\t' read -r state target; do
+    [[ -n "$target" ]] || continue
+    case "$target" in
+      "$CONFIG_FILE")
+        # Only the [osd] section is ours; keep the user's other settings as they are now
+        if [[ "$state" == present ]]; then
+          voxtype_config_restore_osd_section "$CONFIG_FILE" "$base/files/${target#/}" || true
+        else
+          voxtype_config_restore_osd_section "$CONFIG_FILE" "" || true
+        fi
+        ;;
+      "$INSTALL_FILE") ;; # removed below
+      *)
+        # Quickshell dir & anything else: byte-for-byte restore / removal
+        transaction_safe_target "$target" || {
+          echo "Refusing unsafe rollback target: $target" >&2
+          continue
+        }
+        if [[ "$state" == present ]]; then
+          transaction_remove_target "$target"
+          mkdir -p -- "$(dirname -- "$target")"
+          cp -a --reflink=auto -- "$base/files/${target#/}" "$target"
+        else
+          transaction_remove_target "$target"
+        fi
+        ;;
+    esac
+  done <"$base/targets.tsv"
+}
+
 if [[ -n "$transaction_dir" && -f "$transaction_dir/targets.tsv" ]]; then
-  echo "Restoring previous files from transaction backup..."
-  transaction_restore "$transaction_dir"
+  echo "Restoring pre-install state from $transaction_dir..."
+  restore_from_baseline "$transaction_dir"
 else
   echo "No transaction record found; removing installed files directly..."
-  qml_uninstall "$(qml_target_dir)"
-  voxtype_config_disable_osd "$(voxtype_config_default_path)" || true
+  qml_uninstall "$QUICKSHELL_DIR"
+  voxtype_config_disable_osd "$CONFIG_FILE" || true
 fi
 
 # Remove our keybinding block (user edits elsewhere in the file are preserved)

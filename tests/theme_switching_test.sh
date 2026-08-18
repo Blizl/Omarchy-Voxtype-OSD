@@ -106,6 +106,9 @@ PanelWindow {
     function onAccentColorChanged() {
       console.log("ACCENT_CHANGED:" + VT.Theme.currentThemeName + ":" + VT.Theme.accentColor + ":" + VT.Theme.themeMode);
     }
+    function onCurrentThemeNameChanged() {
+      console.log("THEME_NAME:" + VT.Theme.currentThemeName + ":" + VT.Theme.accentColor + ":" + VT.Theme.themeMode);
+    }
   }
 
   Component.onCompleted: {
@@ -142,7 +145,7 @@ EOF
   for entry in "${THEMES[@]}"; do
     IFS=":" read -r theme_name _ _ <<<"$entry"
     # Verify that either INITIAL_THEME or ACCENT_CHANGED logged this theme
-    if ! echo "$LOG_CONTENT" | grep -qE "(ACCENT_CHANGED|INITIAL_THEME):$theme_name:"; then
+    if ! echo "$LOG_CONTENT" | grep -qE "(ACCENT_CHANGED|INITIAL_THEME|THEME_NAME):$theme_name:"; then
       echo "Quickshell Output Log:" >&2
       cat "$OUTPUT_LOG" >&2
       fail "Dynamic theme switch failed to register theme '$theme_name' in live Quickshell"

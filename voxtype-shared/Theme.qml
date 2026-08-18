@@ -91,6 +91,37 @@ QtObject {
     /// Foreground muted / secondary text color.
     property color subtextColor: "#9aa3b2"
 
+    /// Selected list-row fill. Dark themes darken the accent; light
+    /// themes keep a translucent wash so dark subtext stays readable.
+    readonly property color selectedFill: theme.themeMode === "light"
+        ? Qt.rgba(theme.accentColor.r, theme.accentColor.g, theme.accentColor.b, 0.22)
+        : Qt.darker(theme.accentColor, 1.6)
+
+    /// Hovered list-row fill.
+    readonly property color rowHoverFill: theme.themeMode === "light"
+        ? Qt.rgba(0, 0, 0, 0.06)
+        : Qt.rgba(1, 1, 1, 0.08)
+
+    /// Idle list-row fill.
+    readonly property color rowIdleFill: theme.themeMode === "light"
+        ? Qt.rgba(0, 0, 0, 0.03)
+        : Qt.rgba(1, 1, 1, 0.03)
+
+    /// Idle action-chip fill (meeting buttons, similar controls).
+    readonly property color chipIdleFill: theme.themeMode === "light"
+        ? Qt.rgba(0, 0, 0, 0.06)
+        : Qt.rgba(1, 1, 1, 0.06)
+
+    /// Hovered action-chip fill.
+    readonly property color chipHoverFill: theme.themeMode === "light"
+        ? Qt.rgba(theme.accentColor.r, theme.accentColor.g, theme.accentColor.b, 0.20)
+        : Qt.darker(theme.accentColor, 1.2)
+
+    /// Pressed action-chip fill.
+    readonly property color chipPressedFill: theme.themeMode === "light"
+        ? Qt.rgba(theme.accentColor.r, theme.accentColor.g, theme.accentColor.b, 0.32)
+        : Qt.darker(theme.accentColor, 1.4)
+
     /// Equalizer bar base color.
     property color waveformColor: theme.accentColor
 

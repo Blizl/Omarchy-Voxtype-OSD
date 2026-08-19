@@ -20,7 +20,7 @@ A floating, click-through voice HUD for [VoxType](https://voxtype.io) that autom
   - 🟢 **Voice Activity (VAD)**: Dynamic green halo trigger on active speech.
 - **Animated Theme Transitions**: When the active Omarchy theme changes, the OSD plays a short masked reveal wipe — mirroring Omarchy's own wallpaper transition — instead of an abrupt colour flip, with a brief "peek" to confirm the change even while hidden. Reveal geometry is configurable (`omarchy` / `grow` / `wipe-right` / `wipe-left` / `fade` / `none`); see [Theme transitions](#theme-transitions).
 - **Click-Through Wayland Overlay**: Transparent `WlrLayershell` overlay with mouse event pass-through mask so the HUD never intercepts cursor clicks.
-- **Engine Picker Modal** (`SUPER + E`): Floating popup (`EnginePicker.qml`) to switch between Whisper, Parakeet, SenseVoice, Moonshine, and Sherpa-ONNX engines on the fly.
+- **Engine Picker Modal** (`SUPER + E`): Floating popup (`EnginePicker.qml`) to switch between Whisper, Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual, and Cohere engines on the fly. Engines are split into what is ready to use versus what still needs downloading, so the list reflects your machine.
 - **Meeting Controls HUD** (`SUPER + M`): Floating controls panel (`MeetingControls.qml`) surfacing active meeting title, duration, chunk count, and Start / Pause / Resume / Stop triggers.
 - **Atomic Rollback & Safety**: Full transactional backups, automated checkpoints, and clean uninstaller restoring previous configurations without leaving orphaned files.
 
@@ -29,6 +29,18 @@ A floating, click-through voice HUD for [VoxType](https://voxtype.io) that autom
 ![Engine Picker and Meeting Controls Demo](assets/voxtype-osd-panels.gif)
 
 The `SUPER + E` engine picker and `SUPER + M` meeting controls panel float over the desktop the same way the OSD does, and pick up theme changes live too.
+
+The picker sizes itself from its contents, so the whole engine list fits on screen instead of clipping the last row, and it scrolls if a future engine would overflow. Each row carries a one-line capability blurb, and engines you have not downloaded stay visible under an **Unavailable** heading with the `voxtype setup model` command needed to fetch them.
+
+| Nord (dark) | Catppuccin Latte (light) |
+| :---: | :---: |
+| <img src="assets/pr-engine-picker/nord-engine-picker-after.png" width="320" alt="Engine picker on the Nord theme"> | <img src="assets/pr-engine-picker/catppuccin-latte-engine-picker-after.png" width="320" alt="Engine picker on the Catppuccin Latte theme"> |
+
+Secondary text uses the theme's `subtextColor`, and selected and hover fills are tuned separately for light and dark themes so row text stays readable either way. Meeting controls get the same treatment.
+
+| Meeting controls (`SUPER + M`, Nord) |
+| :---: |
+| <img src="assets/pr-engine-picker/nord-meeting-controls-after.png" width="320" alt="Meeting controls on the Nord theme"> |
 
 ---
 

@@ -9,12 +9,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
+          # shellcheck ships preinstalled on the GitHub-hosted runner images, so
+          # skip apt entirely on the happy path. An unbounded `apt-get update`
+          # stalled against a bad mirror once and hung the job for the full 6h
+          # limit; only reach for apt if the binary is genuinely missing.
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck --version
+            exit 0
+          fi
           sudo apt-get update
           sudo apt-get install -y shellcheck
 

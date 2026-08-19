@@ -15,13 +15,14 @@
 //    once when the panel opens and reading the `compiled_features`
 //    array (fixed in #384 to enumerate every ONNX engine, not just
 //    parakeet + GPU backends). Engines absent from that array are
-//    rendered dim with a "(not compiled)" suffix so the user can see
-//    why a row won't switch. When the JSON parse fails (older binary
-//    that predates #384, or `--json` returning text), the picker
-//    falls back to showing every engine as available and relies on
-//    `voxtype config set engine`'s feature gate to reject a request
-//    that targets an uncompiled engine. Whisper is always available;
-//    it is not a Cargo feature.
+    //    demoted under a visible "Unavailable" heading. An engine is
+    //    ready only when it is compiled into the running binary AND
+    //    its model is on disk. Missing-binary rows hint at
+    //    `voxtype configure`; missing-model rows hint at
+    //    `voxtype setup model`. When the JSON parse fails (older
+    //    binary that predates #384, or `--json` returning text), ONNX
+    //    engines are treated as not compiled. Whisper is always
+    //    compiled; it is not a Cargo feature.
 //
 // 2. Currently-active engine: read from
 //    `~/.config/voxtype/config.toml` via FileView. The file is parsed
@@ -117,6 +118,21 @@ PanelWindow {
         return "/tmp/voxtype-config.toml";
     }
 
+    /// Directory where voxtype stores downloaded models.
+    /// Mirrors `$XDG_DATA_HOME/voxtype/models` with a
+    /// `$HOME/.local/share/voxtype/models` fallback.
+    property string modelsDir: {
+        const xdgData = Quickshell.env("XDG_DATA_HOME");
+        if (xdgData && xdgData.length > 0) {
+            return xdgData + "/voxtype/models";
+        }
+        const home = Quickshell.env("HOME");
+        if (home && home.length > 0) {
+            return home + "/.local/share/voxtype/models";
+        }
+        return "/tmp/voxtype-models";
+    }
+
     /// Whether the panel is currently visible. Compositors can flip
     /// this directly as an alternative to the flag-file trigger.
     property bool open: false
@@ -151,20 +167,26 @@ PanelWindow {
     // `ENGINE_NAMES` in src/config_set.rs. If a new engine lands
     // upstream, add it here.
     readonly property var engines: [
-        { name: "whisper",     label: "Whisper",     blurb: "whisper.cpp default; CPU/GPU" },
-        { name: "parakeet",    label: "Parakeet",    blurb: "NVIDIA FastConformer; fast English" },
-        { name: "moonshine",   label: "Moonshine",   blurb: "Encoder-decoder ASR" },
-        { name: "sensevoice",  label: "SenseVoice",  blurb: "Alibaba multilingual CTC" },
-        { name: "paraformer",  label: "Paraformer",  blurb: "FunASR CTC encoder" },
-        { name: "dolphin",     label: "Dolphin",     blurb: "Dictation-optimized CTC" },
-        { name: "omnilingual", label: "Omnilingual", blurb: "FunASR 50+ languages" },
-        { name: "cohere",      label: "Cohere",      blurb: "Whisper-style; top of OpenASR" }
+        { name: "whisper",     label: "Whisper",     summary: "Multilingual · CPU or GPU",              defaultModel: "base.en" },
+        { name: "parakeet",    label: "Parakeet",    summary: "English · Fast",                         defaultModel: "parakeet-tdt-0.6b-v3" },
+        { name: "moonshine",   label: "Moonshine",   summary: "English",                                defaultModel: "base" },
+        { name: "sensevoice",  label: "SenseVoice",  summary: "Chinese · English · Japanese · Korean", defaultModel: "sensevoice-small" },
+        { name: "paraformer",  label: "Paraformer",  summary: "Chinese and English",                    defaultModel: "paraformer-zh" },
+        { name: "dolphin",     label: "Dolphin",     summary: "Dictation · no English",                 defaultModel: "dolphin-base" },
+        { name: "omnilingual", label: "Omnilingual", summary: "Broad language coverage",                defaultModel: "omnilingual-large" },
+        { name: "cohere",      label: "Cohere",      summary: "High accuracy · multilingual",           defaultModel: "cohere-transcribe-int8" }
     ]
 
     // ----- internal state -----
 
     property string _activeEngine: "whisper"
     property var _compiledFeatures: []
+    property var _configModels: ({})
+    property var _modelDirEntries: []
+    property var _availableEngines: []
+    property var _unavailableEngines: []
+    property int _unavailableBinaryCount: 0
+    property int _unavailableModelCount: 0
     property int _selectedIndex: 0
     // Transient line for switch progress / errors. Cleared after a few
     // seconds or replaced by the next action.
@@ -176,6 +198,8 @@ PanelWindow {
     // `_selectedIndex` (the user could have moved the cursor between
     // pressing Enter and the process exit).
     property string _pendingEngine: ""
+    // "binary" | "model" | "" — flashes the matching unavailable header hint.
+    property string _pulsedHint: ""
 
     // ----- config.toml watcher (read current engine) -----
 
@@ -190,13 +214,9 @@ PanelWindow {
             if (parsed !== root._activeEngine) {
                 root._activeEngine = parsed;
             }
-            // Move the selection to the active engine the first time
-            // we load (or after a switch). The user can still arrow
-            // away before pressing Enter.
-            const idx = root._indexOfEngine(parsed);
-            if (idx >= 0) {
-                root._selectedIndex = idx;
-            }
+            root._configModels = root._parseSectionModels(text() || "");
+            root._refreshEngineLists();
+            root._syncSelectionToActive();
         }
 
         onLoadFailed: {
@@ -206,6 +226,9 @@ PanelWindow {
             if (root._activeEngine !== "whisper") {
                 root._activeEngine = "whisper";
             }
+            root._configModels = {};
+            root._refreshEngineLists();
+            root._syncSelectionToActive();
         }
 
         onFileChanged: reload()
@@ -267,6 +290,34 @@ PanelWindow {
         }
     }
 
+    // ----- downloaded models (ls of modelsDir) -----
+
+    Process {
+        id: modelsListProcess
+        command: ["ls", "-1", root.modelsDir]
+        running: false
+
+        property string _buffer: ""
+
+        stdout: SplitParser {
+            splitMarker: "\n"
+            onRead: function(line) { modelsListProcess._buffer += line + "\n"; }
+        }
+
+        onRunningChanged: {
+            if (!modelsListProcess.running) {
+                root._parseModelDirListing(modelsListProcess._buffer);
+                modelsListProcess._buffer = "";
+            }
+        }
+
+        function refresh() {
+            if (modelsListProcess.running) return;
+            modelsListProcess._buffer = "";
+            modelsListProcess.running = true;
+        }
+    }
+
     // ----- `voxtype config set engine <name>` (switch) -----
 
     Process {
@@ -301,6 +352,13 @@ PanelWindow {
     }
 
     Timer {
+        id: hintPulseTimer
+        interval: 1400
+        repeat: false
+        onTriggered: root._pulsedHint = ""
+    }
+
+    Timer {
         id: actionStatusTimer
         interval: 3000
         repeat: false
@@ -329,21 +387,86 @@ PanelWindow {
             VT.Theme.reload();
             configFile.reload();
             featuresProcess.refresh();
+            modelsListProcess.refresh();
             // Reset transient state so a previous "Failed to..." line
             // doesn't carry over into a fresh open.
             root._actionStatus = "";
             root._actionKind = "info";
+            root._pulsedHint = "";
             autoCloseTimer.stop();
+            hintPulseTimer.stop();
+            Qt.callLater(function() {
+                listFlick.ensureIndexVisible(root._selectedIndex);
+            });
         }
+    }
+
+    on_CompiledFeaturesChanged: {
+        root._refreshEngineLists();
+        root._syncSelectionToActive();
+    }
+
+    on_ModelDirEntriesChanged: {
+        root._refreshEngineLists();
+        root._syncSelectionToActive();
+    }
+
+    Component.onCompleted: {
+        root._refreshEngineLists();
+        modelsListProcess.refresh();
     }
 
     // ----- helpers -----
 
-    function _indexOfEngine(name) {
-        for (let i = 0; i < root.engines.length; ++i) {
-            if (root.engines[i].name === name) return i;
+    function _indexInList(list, name) {
+        for (let i = 0; i < list.length; ++i) {
+            if (list[i].name === name) return i;
         }
         return -1;
+    }
+
+    function _focusRows() {
+        const rows = root._availableEngines.slice();
+        for (let i = 0; i < root._unavailableEngines.length; ++i) {
+            rows.push(root._unavailableEngines[i]);
+        }
+        return rows;
+    }
+
+    function _focusIndexOf(name) {
+        const rows = root._focusRows();
+        return root._indexInList(rows, name);
+    }
+
+    function _refreshEngineLists() {
+        const avail = [];
+        const unavail = [];
+        for (let i = 0; i < root.engines.length; ++i) {
+            const engine = root.engines[i];
+            if (root._engineAvailable(engine.name)) {
+                avail.push(engine);
+            } else {
+                unavail.push(engine);
+            }
+        }
+        root._availableEngines = avail;
+        root._unavailableEngines = unavail;
+        let binaryCount = 0;
+        let modelCount = 0;
+        for (let j = 0; j < unavail.length; ++j) {
+            if (!root._engineCompiled(unavail[j].name)) {
+                binaryCount++;
+            } else {
+                modelCount++;
+            }
+        }
+        root._unavailableBinaryCount = binaryCount;
+        root._unavailableModelCount = modelCount;
+    }
+
+    function _syncSelectionToActive() {
+        const idx = root._focusIndexOf(root._activeEngine);
+        root._selectedIndex = idx >= 0 ? idx : 0;
     }
 
     function _parseEngineFromToml(content) {
@@ -370,6 +493,81 @@ PanelWindow {
         return "whisper";
     }
 
+    function _parseSectionModels(content) {
+        const map = {};
+        if (!content || content.length === 0) return map;
+        for (let i = 0; i < root.engines.length; ++i) {
+            const name = root.engines[i].name;
+            const value = root._tomlSectionKey(content, name, "model");
+            if (value.length > 0) {
+                map[name] = value;
+            }
+        }
+        return map;
+    }
+
+    function _tomlSectionKey(content, section, key) {
+        const header = "[" + section + "]";
+        const lines = content.split("\n");
+        let inSection = false;
+        for (let i = 0; i < lines.length; ++i) {
+            const line = lines[i].replace(/^\s+/, "");
+            if (line.length === 0 || line[0] === "#") continue;
+            if (line[0] === "[") {
+                inSection = (line.replace(/\s+/g, "") === header);
+                continue;
+            }
+            if (!inSection) continue;
+            const m = line.match(new RegExp("^" + key + "\\s*=\\s*[\"']([^\"']+)[\"']"));
+            if (m) return m[1];
+        }
+        return "";
+    }
+
+    function _parseModelDirListing(buf) {
+        const entries = [];
+        const lines = (buf || "").split("\n");
+        for (let i = 0; i < lines.length; ++i) {
+            const name = lines[i].trim();
+            if (name.length > 0) entries.push(name);
+        }
+        root._modelDirEntries = entries;
+    }
+
+    function _catalogEntry(name) {
+        for (let i = 0; i < root.engines.length; ++i) {
+            if (root.engines[i].name === name) return root.engines[i];
+        }
+        return null;
+    }
+
+    function _modelNameFor(name) {
+        const configured = root._configModels[name];
+        if (configured && configured.length > 0) return configured;
+        const entry = root._catalogEntry(name);
+        return entry && entry.defaultModel ? entry.defaultModel : "";
+    }
+
+    function _modelDownloaded(name) {
+        const raw = root._modelNameFor(name);
+        if (!raw || raw.length === 0) return false;
+        if (raw[0] === "/") {
+            const base = raw.substring(raw.lastIndexOf("/") + 1);
+            return root._modelDirEntries.indexOf(base) >= 0;
+        }
+        const entries = root._modelDirEntries;
+        if (name === "whisper") {
+            return entries.indexOf("ggml-" + raw + ".bin") >= 0
+                || entries.indexOf(raw + ".bin") >= 0
+                || entries.indexOf(raw) >= 0;
+        }
+        if (name === "moonshine") {
+            return entries.indexOf("moonshine-" + raw) >= 0
+                || entries.indexOf(raw) >= 0;
+        }
+        return entries.indexOf(raw) >= 0;
+    }
+
     function _parseFeaturesJson(buf) {
         if (!buf || buf.length === 0) return;
         try {
@@ -387,33 +585,60 @@ PanelWindow {
         }
     }
 
-    function _engineAvailable(name) {
-        // Whisper is always available; it's not a Cargo feature.
+    function _engineCompiled(name) {
         if (name === "whisper") return true;
-        // If we have no feature info (older binary, parse failure),
-        // optimistically show every engine as available and let
-        // `config set engine` reject unsupported ones at switch time.
-        if (root._compiledFeatures.length === 0) return true;
+        // Unknown feature list: do not claim ONNX engines are ready.
+        if (root._compiledFeatures.length === 0) return false;
         return root._compiledFeatures.indexOf(name) >= 0;
     }
 
+    function _engineAvailable(name) {
+        return root._engineCompiled(name) && root._modelDownloaded(name);
+    }
+
+    function _unavailableHintKind(name) {
+        if (!root._engineCompiled(name)) return "binary";
+        return "model";
+    }
+
+    function _pulseUnavailableHint(name) {
+        const kind = root._unavailableHintKind(name);
+        if (root._pulsedHint === kind) return;
+        root._pulsedHint = kind;
+        hintPulseTimer.restart();
+    }
+
     function _selectEngine(idx) {
-        if (idx < 0 || idx >= root.engines.length) return;
+        const rows = root._focusRows();
+        if (idx < 0 || idx >= rows.length) return;
         root._selectedIndex = idx;
+        listFlick.ensureIndexVisible(idx);
     }
 
     function _commit() {
+        const rows = root._focusRows();
         const idx = root._selectedIndex;
-        if (idx < 0 || idx >= root.engines.length) return;
-        const name = root.engines[idx].name;
+        if (idx < 0 || idx >= rows.length) return;
+        const engine = rows[idx];
+        if (!root._engineAvailable(engine.name)) {
+            root._pulseUnavailableHint(engine.name);
+            return;
+        }
+        if (engine.name === root._activeEngine) {
+            root._actionStatus = "";
+            root._actionKind = "info";
+            actionStatusTimer.stop();
+            autoCloseTimer.stop();
+            return;
+        }
         if (switchProcess.running) return;
-        root._pendingEngine = name;
+        root._pendingEngine = engine.name;
         root._actionKind = "info";
-        root._actionStatus = "Switching to " + name + "...";
+        root._actionStatus = "Switching to " + engine.name + "...";
         actionStatusTimer.stop();
         autoCloseTimer.stop();
         switchProcess.command = [
-            root.voxtypeBinary, "config", "set", "engine", name
+            root.voxtypeBinary, "config", "set", "engine", engine.name
         ];
         switchProcess.running = true;
     }
@@ -436,7 +661,7 @@ PanelWindow {
             autoCloseTimer.restart();
         } else if (notCompiled) {
             root._actionKind = "error";
-            root._actionStatus = "Engine " + name + " isn't compiled into this binary.";
+            root._pulseUnavailableHint(name);
             actionStatusTimer.restart();
         } else {
             root._actionKind = "error";
@@ -456,9 +681,12 @@ PanelWindow {
     Rectangle {
         id: card
         width: 420
-        // Height grows with the engine list + chrome.
-        // Header (~28) + 8 rows (~36 each) + status line (~20) + padding.
-        height: 28 + root.engines.length * 36 + 20 + 2 * VT.Theme.padding + 16
+        // Size from content so a new engine cannot clip the last row.
+        // Cap at 80% of the overlay and scroll the list if needed.
+        readonly property int maxHeight: Math.max(160, Math.floor(root.height * 0.8))
+        implicitHeight: body.implicitHeight + 2 * VT.Theme.padding + 4
+        height: Math.min(implicitHeight, maxHeight)
+        clip: true
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.verticalCenter: parent.verticalCenter
         radius: VT.Theme.cornerRadius
@@ -470,14 +698,24 @@ PanelWindow {
 
         Keys.onEscapePressed: root._close()
         Keys.onUpPressed: function(event) {
+            const rows = root._focusRows();
+            if (rows.length === 0) {
+                event.accepted = true;
+                return;
+            }
             const next = root._selectedIndex > 0
                        ? root._selectedIndex - 1
-                       : root.engines.length - 1;
+                       : rows.length - 1;
             root._selectEngine(next);
             event.accepted = true;
         }
         Keys.onDownPressed: function(event) {
-            const next = (root._selectedIndex + 1) % root.engines.length;
+            const rows = root._focusRows();
+            if (rows.length === 0) {
+                event.accepted = true;
+                return;
+            }
+            const next = (root._selectedIndex + 1) % rows.length;
             root._selectEngine(next);
             event.accepted = true;
         }
@@ -490,10 +728,10 @@ PanelWindow {
             event.accepted = true;
         }
         Keys.onPressed: function(event) {
-            // Number keys 1..8 jump-select then commit.
+            // Number keys jump-select among available engines only.
             if (event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
                 const idx = event.key - Qt.Key_1;
-                if (idx < root.engines.length) {
+                if (idx < root._availableEngines.length) {
                     root._selectEngine(idx);
                     root._commit();
                     event.accepted = true;
@@ -502,8 +740,12 @@ PanelWindow {
         }
 
         ColumnLayout {
+            id: body
             anchors.fill: parent
-            anchors.margins: VT.Theme.padding
+            anchors.leftMargin: VT.Theme.padding
+            anchors.rightMargin: VT.Theme.padding
+            anchors.topMargin: VT.Theme.padding
+            anchors.bottomMargin: VT.Theme.padding + 4
             spacing: 8
 
             // --- header ---
@@ -521,36 +763,148 @@ PanelWindow {
                 }
 
                 Text {
-                    text: "Esc"
+                    text: "Esc  Close"
                     font.family: "JetBrainsMono Nerd Font"
                     font.pixelSize: 11
-                    color: VT.Theme.idleColor
+                    color: VT.Theme.subtextColor
                     opacity: 0.7
                 }
             }
 
             // --- engine rows ---
-            Repeater {
-                model: root.engines
+            Flickable {
+                id: listFlick
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.preferredHeight: engineColumn.implicitHeight
+                Layout.minimumHeight: 36
+                clip: true
+                contentWidth: width
+                contentHeight: engineColumn.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height + 1
+                flickableDirection: Flickable.VerticalFlick
 
-                EngineRow {
-                    Layout.fillWidth: true
-                    engineName: modelData.name
-                    engineLabel: modelData.label
-                    blurb: modelData.blurb
-                    shortcut: (index + 1).toString()
-                    isActive: modelData.name === root._activeEngine
-                    isSelected: index === root._selectedIndex
-                    isAvailable: root._engineAvailable(modelData.name)
+                ColumnLayout {
+                    id: engineColumn
+                    width: listFlick.width
+                    spacing: 8
 
-                    // Mouse click jumps the keyboard cursor to this
-                    // row and commits in one go. Hover is intentionally
-                    // not bound to selection so mouse motion across
-                    // the panel doesn't fight a user who's
-                    // arrow-keying through the list.
-                    onClicked: {
-                        root._selectEngine(index);
-                        root._commit();
+                    Repeater {
+                        id: availableRepeater
+                        model: root._availableEngines
+
+                        EngineRow {
+                            Layout.fillWidth: true
+                            engineName: modelData.name
+                            engineLabel: modelData.label
+                            summary: modelData.summary
+                            shortcut: (index + 1).toString()
+                            isActive: modelData.name === root._activeEngine
+                            isSelected: index === root._selectedIndex
+                            isAvailable: true
+
+                            onClicked: {
+                                root._selectEngine(index);
+                                root._commit();
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        id: unavailableHeader
+                        visible: root._unavailableEngines.length > 0
+                        Layout.fillWidth: true
+                        spacing: 2
+
+                        Text {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 10
+                            Layout.topMargin: 4
+                            text: "Unavailable (" + root._unavailableEngines.length + ")"
+                            font.family: "JetBrainsMono Nerd Font"
+                            font.pixelSize: 12
+                            color: VT.Theme.subtextColor
+                        }
+
+                        Text {
+                            visible: root._unavailableBinaryCount > 0
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 10
+                            textFormat: Text.StyledText
+                            text: "Use <b>voxtype configure</b> to switch binaries"
+                            font.family: "JetBrainsMono Nerd Font"
+                            font.pixelSize: 11
+                            color: root._pulsedHint === "binary"
+                                   ? VT.Theme.accentColor
+                                   : VT.Theme.subtextColor
+                            opacity: root._pulsedHint === "binary" ? 1.0 : 0.7
+                        }
+
+                        Text {
+                            visible: root._unavailableModelCount > 0
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 10
+                            Layout.bottomMargin: 4
+                            textFormat: Text.StyledText
+                            text: "Download with <b>voxtype setup model</b>"
+                            font.family: "JetBrainsMono Nerd Font"
+                            font.pixelSize: 11
+                            color: root._pulsedHint === "model"
+                                   ? VT.Theme.accentColor
+                                   : VT.Theme.subtextColor
+                            opacity: root._pulsedHint === "model" ? 1.0 : 0.7
+                        }
+                    }
+
+                    Repeater {
+                        id: unavailableRepeater
+                        model: root._unavailableEngines
+
+                        EngineRow {
+                            Layout.fillWidth: true
+                            engineName: modelData.name
+                            engineLabel: modelData.label
+                            summary: modelData.summary
+                            shortcut: ""
+                            isActive: modelData.name === root._activeEngine
+                            isSelected: (root._availableEngines.length + index) === root._selectedIndex
+                            isAvailable: false
+
+                            onClicked: {
+                                root._selectEngine(root._availableEngines.length + index);
+                                root._commit();
+                            }
+                        }
+                    }
+                }
+
+                function ensureIndexVisible(idx) {
+                    const rows = root._focusRows();
+                    if (idx < 0 || idx >= rows.length || height <= 0) return;
+                    const name = rows[idx].name;
+                    let item = null;
+                    const availIdx = root._indexInList(root._availableEngines, name);
+                    if (availIdx >= 0) {
+                        item = availableRepeater.itemAt(availIdx);
+                    } else {
+                        const unavailIdx = root._indexInList(root._unavailableEngines, name);
+                        if (unavailIdx >= 0) {
+                            item = unavailableRepeater.itemAt(unavailIdx);
+                        }
+                    }
+                    if (!item) return;
+                    const pos = item.mapToItem(engineColumn, 0, 0);
+                    const y = pos.y;
+                    const bottom = y + item.height;
+                    if (contentHeight <= height + 1) {
+                        contentY = 0;
+                        return;
+                    }
+                    if (y < contentY) {
+                        contentY = Math.max(0, y);
+                    } else if (bottom > contentY + height) {
+                        contentY = Math.min(contentHeight - height, bottom - height);
                     }
                 }
             }
@@ -558,14 +912,15 @@ PanelWindow {
             // --- transient status line ---
             Text {
                 Layout.fillWidth: true
-                text: root._actionStatus
                 visible: root._actionStatus.length > 0
+                text: root._actionStatus
                 font.family: "JetBrainsMono Nerd Font"
                 font.pixelSize: 11
                 color: root._actionKind === "ok"    ? VT.Theme.streamingColor
                      : root._actionKind === "error" ? VT.Theme.recordingColor
                      :                                VT.Theme.textColor
-                wrapMode: Text.WordWrap
+                wrapMode: Text.NoWrap
+                elide: Text.ElideRight
             }
         }
     }
@@ -587,7 +942,7 @@ PanelWindow {
         id: row
         property string engineName: ""
         property string engineLabel: ""
-        property string blurb: ""
+        property string summary: ""
         property string shortcut: ""
         property bool isActive: false
         property bool isSelected: false
@@ -595,50 +950,58 @@ PanelWindow {
 
         signal clicked()
 
-        Layout.preferredHeight: 36
+        implicitHeight: contentRow.implicitHeight + 16
+        Layout.preferredHeight: implicitHeight
         radius: 6
-        color: row.isSelected ? Qt.darker(VT.Theme.accentColor, 1.6)
-              : mouse.containsMouse ? Qt.rgba(1, 1, 1, 0.08)
-              : Qt.rgba(1, 1, 1, 0.03)
+        color: row.isSelected ? VT.Theme.selectedFill
+              : mouse.containsMouse ? VT.Theme.rowHoverFill
+              : VT.Theme.rowIdleFill
         border.width: row.isSelected ? 1 : 0
         border.color: VT.Theme.accentColor
-        opacity: row.isAvailable ? 1.0 : 0.55
 
         RowLayout {
-            anchors.fill: parent
+            id: contentRow
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
             anchors.leftMargin: 10
             anchors.rightMargin: 10
             spacing: 10
 
-            // Active-engine checkmark; reserves the slot when inactive
-            // so the label column stays aligned across all rows.
+            // Active / unavailable glyph; blank for available-but-inactive
+            // so the name column stays aligned across all rows.
             Text {
                 Layout.preferredWidth: 14
-                text: row.isActive ? "✓" : ""
+                text: row.isActive ? "✓" : (row.isAvailable ? "" : "–")
                 font.family: "JetBrainsMono Nerd Font"
                 font.pixelSize: 14
                 font.bold: true
-                color: VT.Theme.streamingColor
+                color: row.isActive ? VT.Theme.streamingColor : VT.Theme.subtextColor
                 horizontalAlignment: Text.AlignHCenter
             }
 
-            Text {
-                text: row.engineLabel
-                font.family: "JetBrainsMono Nerd Font"
-                font.pixelSize: 13
-                font.bold: row.isActive
-                color: row.isActive ? VT.Theme.accentColor : VT.Theme.textColor
-            }
-
-            Text {
+            ColumnLayout {
                 Layout.fillWidth: true
-                text: row.isAvailable
-                      ? row.blurb
-                      : (row.blurb + "  (not compiled)")
-                font.family: "JetBrainsMono Nerd Font"
-                font.pixelSize: 11
-                color: VT.Theme.idleColor
-                elide: Text.ElideRight
+                spacing: 2
+
+                Text {
+                    Layout.fillWidth: true
+                    text: row.engineLabel
+                    font.family: "JetBrainsMono Nerd Font"
+                    font.pixelSize: 13
+                    font.bold: row.isActive
+                    color: row.isActive ? VT.Theme.accentColor : VT.Theme.textColor
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: row.summary
+                    font.family: "JetBrainsMono Nerd Font"
+                    font.pixelSize: 11
+                    color: VT.Theme.subtextColor
+                    elide: Text.ElideRight
+                }
             }
 
             Text {
@@ -646,7 +1009,7 @@ PanelWindow {
                 text: "[" + row.shortcut + "]"
                 font.family: "JetBrainsMono Nerd Font"
                 font.pixelSize: 10
-                color: VT.Theme.idleColor
+                color: VT.Theme.subtextColor
                 opacity: 0.7
             }
         }
@@ -655,7 +1018,7 @@ PanelWindow {
             id: mouse
             anchors.fill: parent
             hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
+            cursorShape: row.isAvailable ? Qt.PointingHandCursor : Qt.ArrowCursor
             onClicked: row.clicked()
         }
     }

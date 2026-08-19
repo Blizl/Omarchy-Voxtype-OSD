@@ -502,10 +502,10 @@ PanelWindow {
                 }
 
                 Text {
-                    text: "Esc"
+                    text: "Esc  Close"
                     font.family: "JetBrainsMono Nerd Font"
                     font.pixelSize: 11
-                    color: VT.Theme.idleColor
+                    color: VT.Theme.subtextColor
                     opacity: 0.7
                 }
             }
@@ -614,9 +614,9 @@ PanelWindow {
         Layout.fillWidth: true
         Layout.preferredHeight: 36
         radius: 6
-        color: mouse.pressed && btn.enabled ? Qt.darker(VT.Theme.accentColor, 1.4)
-              : mouse.containsMouse && btn.enabled ? Qt.darker(VT.Theme.accentColor, 1.2)
-              : Qt.rgba(1, 1, 1, 0.06)
+        color: mouse.pressed && btn.enabled ? VT.Theme.chipPressedFill
+              : mouse.containsMouse && btn.enabled ? VT.Theme.chipHoverFill
+              : VT.Theme.chipIdleFill
         border.width: 1
         border.color: btn.enabled ? VT.Theme.accentColor : VT.Theme.idleColor
         opacity: btn.enabled ? 1.0 : 0.4
@@ -639,7 +639,7 @@ PanelWindow {
                 text: "[" + btn.shortcut + "]"
                 font.family: "JetBrainsMono Nerd Font"
                 font.pixelSize: 10
-                color: VT.Theme.idleColor
+                color: VT.Theme.subtextColor
                 anchors.verticalCenter: parent.verticalCenter
             }
         }
